@@ -9,7 +9,7 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   const circles = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
   const TALLY_FORM_ID = '6DjZg5';
-  const PUBLIC_VERSION = '1.3.0';
+  const PUBLIC_VERSION = '1.3.1';
   const PUBLIC_RELEASE_DATE = '2026-11-13';
   const LEADERBOARD_IMAGE_BY_RANK = {1:'assets/ui/rank-first.png',2:'assets/ui/rank-second.png',3:'assets/ui/rank-third.png'};
   // Keep the underlying provenance, but omit internal answer-approval workflow from study copy.
@@ -1212,6 +1212,7 @@
     return {matched:'✓ 검증 완료',owner:'운영자 지정 답안',partial:'◐ 관련 근거 확인 · 일부 검토 필요',missing:'! 같은 교수님 강의안 근거 미확보',unresolved:'! 정답 미확정 · 채점 보류',conflict:'! 문항·정답 충돌 · 채점 보류'}[q.lectureAudit?.status]||'근거 재검토';
   }
   function lecturePageLabel(e) {
+    if(e.sourceType==='user_supplied_image')return '사용자 제공 강의안 이미지';
     return `${e.pageBasis?.startsWith('단원')?'단원':'PDF'} ${e.page}쪽`;
   }
   function auditAnswerText(q,answer) {
@@ -1430,7 +1431,7 @@
             src:x.src||x.image,label:x.caption||'사용자 제공 해설 참고 이미지'
           })),
           evidence:evidence.map(lecture=>({
-            label:`${lecture.file||'강의안'} · ${lecture.pageBasis?lecturePageLabel(lecture):'PDF '+(lecture.page||'?')+'쪽'}${lecture.lectureYear?' · '+lecture.lectureYear+'년':''}`,src:lecture.image||lecture.src||''
+            label:`${lecture.file||'강의안'} · ${lecturePageLabel(lecture)}${lecture.lectureYear?' · '+lecture.lectureYear+'년':''}`,src:lecture.image||lecture.src||''
           }))
         };
       }));
@@ -1615,7 +1616,10 @@
       const r={...record(q),hasSubmitted:hasSubmittedBefore(q),selected:el.value,submitted:false,updatedAt:new Date().toISOString()};
       editingQuestionKey=questionViewKey(q);evidenceCollapsedKey='';
       recordBucket()[q.id]=r;markRecordChange(q);saveState();
-      if(r.hasSubmitted&&!infoExpanded){infoExpanded=true;render();return;}
+      if(r.hasSubmitted&&!infoExpanded){infoExpanded=true;
+        // Do not replace the textarea the user is currently typing into.
+        // The expanded explanation is rendered on the next explicit navigation.
+      }
       root.querySelectorAll('[data-action=submit]').forEach(btn=>btn.disabled=!el.value.trim());
     }
   });
@@ -1673,7 +1677,7 @@
     if(e.key==='Escape'){document.querySelector('.image-modal')?.remove();closeDialog();if(mobileMenuOpen){mobileMenuOpen=false;render();}}
     if(e.key==='Enter'&&e.target.matches('.brand')){view='home';render();}
   });
-  window.addEventListener('storage',e=>{if(e.key===KEY){readState();render();toast('다른 탭에서 변경된 학습 기록을 반영했습니다.');}});
+  window.addEventListener('storage',e=>{if(e.key===KEY&&e.newValue!==e.oldValue){readState();render();toast('다른 탭에서 변경된 학습 기록을 반영했습니다.');}});
   async function init() {
     readState();initializeLegacyReviewSchedule();theme();
     try {
@@ -1688,15 +1692,42 @@
         await Promise.allSettled(chosen.professors.map(p=>loadProfessor(p.id)));
       }
       render();
+      // Compare synced state by content (not object insertion order). Network
+      // focus/visibility syncs must NEVER wipe textarea focus or image nodes.
+      const syncKeys=['records','yearExamRecords','predictionRecords','unitRecords',
+        'bookmarks','yearExamBookmarks','predictionBookmarks','unitBookmarks',
+        'customAnswers','customMulti','lastVisited','reviewSchedule',
+        'bookmarkChanges','recordChanges','customAnswerChanges','dailyGoals'];
+      function contentEqual(a,b){
+        if(a===b)return true;
+        if(!a||!b||typeof a!=='object'||typeof b!=='object')return false;
+        if(Array.isArray(a)!==Array.isArray(b))return false;
+        const ka=Object.keys(a),kb=Object.keys(b);
+        return ka.length===kb.length&&ka.every(k=>Object.prototype.hasOwnProperty.call(b,k)&&contentEqual(a[k],b[k]));
+      }
+      let inkAccountSeen=null;
+      function refreshAccountStatusOnly(){
+        const badge=root.querySelector('[data-action="study-account-open"]');
+        if(badge)badge.textContent=window.HeonStudyAccount?.statusLabel?.()||'학습 기록 계정';
+        const uid=window.HeonStudyAccount?.userId||'';
+        if(uid!==inkAccountSeen){inkAccountSeen=uid;window.HeonInk?.setAccount();}
+      }
       window.HeonStudyAccount?.init(
         ()=>state,
         snapshot=>{
           const localPrefs=state.prefs||{};
-          state={...emptyState(),...state,...snapshot,prefs:{...localPrefs,...(snapshot.prefs||{}),theme:localPrefs.theme,explanationWidth:localPrefs.explanationWidth,playerId:localPrefs.playerId,nickname:localPrefs.nickname}};
+          // Theme, preferred layout, and nickname are browser-local settings.
+          const next={...emptyState(),...state,...snapshot,
+            prefs:{...localPrefs,...(snapshot.prefs||{}),theme:localPrefs.theme,
+              explanationWidth:localPrefs.explanationWidth,playerId:localPrefs.playerId,nickname:localPrefs.nickname}};
+          const changed=syncKeys.some(k=>!contentEqual(state[k]||{},next[k]||{}))||
+            !contentEqual(state.prefs||{},next.prefs||{});
+          if(!changed)return; // keep image elements and current typing focus intact
+          state=next;
           try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){console.warn(e);}
           if(catalog)render();
         },
-        ()=>{window.HeonInk?.setAccount();if(catalog)render();}
+        refreshAccountStatusOnly
       );
       if(leaderboardConfigured()){loadSharedLeaderboard(selectedSubject,'22');loadQuestionAuditEvents();}
     }catch(err){

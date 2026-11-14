@@ -4,7 +4,17 @@
 (()=>{
   'use strict';
   const BUCKET='heon-private-content';
-  const MAX_CACHE_BYTES=72*1024*1024;
+  // The original 72 MiB universal cap caused avoidable evictions on desktop.
+  // Use a bounded, device-aware *memory-only* cache: nothing private goes into
+  // Cache Storage, browser HTTP cache, or GitHub Pages.
+  const getCacheBudget=()=>{
+    const memory=Number(navigator.deviceMemory)||0;
+    if(memory && memory<=2)return 40*1024*1024;
+    const compact=window.matchMedia?.('(max-width: 760px)')?.matches;
+    if(compact)return 64*1024*1024;
+    if(window.matchMedia?.('(pointer: coarse)')?.matches)return 96*1024*1024;
+    return 160*1024*1024;
+  };
   let authorized=false,client=null,cacheBytes=0;
   const blobs=new Map(),inflight=new Map();
   let observer=null,intersection=null;
@@ -28,10 +38,13 @@
     return data;
   }
   function cacheSet(path,url,size){
+    const previous=blobs.get(path);
+    if(previous){cacheBytes-=previous.size;if(previous.url!==url)URL.revokeObjectURL(previous.url);}
     blobs.delete(path);blobs.set(path,{url,size});cacheBytes+=size;
     // Preserve URLs still used by visible images. Recently used URLs remain in LRU order.
     let checked=0;
-    while(cacheBytes>MAX_CACHE_BYTES&&blobs.size>1&&checked++<blobs.size){
+    const budget=getCacheBudget();
+    while(cacheBytes>budget&&blobs.size>1&&checked++<blobs.size){
       const [key,item]=blobs.entries().next().value;
       if(key.toLowerCase().endsWith('.pdf')||[...document.images].some(img=>img.src===item.url)){
         blobs.delete(key);blobs.set(key,item);continue;
@@ -71,6 +84,15 @@
     if(!path||el.dataset.protectedReady==='1'||el.dataset.protectedBusy==='1')return;
     el.dataset.protectedSrc=path;
     // Avoid 404 requests to Pages; their absence is by design.
+    // For a cached authenticated image, restore the same live blob: URL
+    // synchronously BEFORE first paint. No blank src or second network call.
+    if(authorized && blobs.has(path)){
+      const cached=blobs.get(path);
+      blobs.delete(path);blobs.set(path,cached); // LRU touch
+      el.dataset.protectedReady='1';
+      el.setAttribute('src',cached.url);
+      return;
+    }
     if(el.getAttribute('src')===raw)el.removeAttribute('src');
     if(!authorized)return;
     if(intersection)intersection.observe(el);

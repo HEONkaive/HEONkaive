@@ -1,5 +1,5 @@
 /* v1.3.0 — public shell only; protected data is never cached by Service Worker. */
-const CACHE='heon-public-v1.3.0-loginfix1';
+const CACHE='heon-public-v1.3.1-flickerfix';
 const SHELL=['./','./index.html','./styles.css','./auth-gate.js','./secure-content.js','./app.js','./study-account.js','./pdf-export.js','./ink.js','./leaderboard-config.js','./manifest.webmanifest'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith('heon-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));

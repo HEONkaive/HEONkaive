@@ -45,7 +45,7 @@
     await window.HeonProtected.loadScript('data/correction-ledger.js');
     booted=true;root.className='loading-shell';
     root.innerHTML='<div class="loading-card"><p>HEON ARCHIVE</p><small>승인된 문제은행을 불러오는 중...</small></div>';
-    const app=document.createElement('script');app.src='app.js?v=1.3.0';app.defer=true;
+    const app=document.createElement('script');app.src='app.js?v=1.3.1';app.defer=true;
     document.head.appendChild(app);
   }
   async function check(userInitiated=false){

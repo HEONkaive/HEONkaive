@@ -9,7 +9,7 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   const circles = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
   const TALLY_FORM_ID = '6DjZg5';
-  const PUBLIC_VERSION = '1.3.1';
+  const PUBLIC_VERSION = '1.3.2';
   const PUBLIC_RELEASE_DATE = '2026-11-13';
   const LEADERBOARD_IMAGE_BY_RANK = {1:'assets/ui/rank-first.png',2:'assets/ui/rank-second.png',3:'assets/ui/rank-third.png'};
   // Keep the underlying provenance, but omit internal answer-approval workflow from study copy.
@@ -630,7 +630,7 @@
     for(const meta of subject.professors){
       const prof=professorCache.get(meta.id);if(!prof)continue;
       for(const q of prof.questions||[]){
-        if(q.isPrediction || String(q.year)!==String(year))continue;
+        if(q.professorOnly || q.isPrediction || String(q.year)!==String(year))continue;
         const prev=collected.find(other=>other.label===q.label && normalizeText(other.prompt).slice(0,42)===normalizeText(q.prompt).slice(0,42));
         if(prev) {duplicate.push({label:q.label,kept:prev.id,other:q.id});continue;}
         // Different questions sharing a number remain separate. Never silently drop a professor's material.
@@ -666,7 +666,7 @@
     const data=professorCache.get(profId);
     if(!data)return [];
     const map=new Map();
-    for (const q of (data.questions||[]).filter(q=>!q.isPrediction)){
+    for (const q of (data.questions||[]).filter(q=>!q.isPrediction&&!q.professorOnly)){
       const title=q.unitTitle||'기타 · 단원 검토';
       const id=q.unitId||title;
       if(!map.has(id))map.set(id,{id,title,items:[]});
@@ -959,7 +959,7 @@
       return [{key:targetKey('prof',p.id),text:`${p.name} 교수님 전체`,count:(professorCache.get(p.id)?.questions||[]).filter(q=>!q.isPrediction).length},
         ...groups.map(g=>({key:targetKey('unit',p.id,g.id),text:`${p.name} · ${g.title}`,count:g.items.length}))];
     });
-    const years=[...new Set((subject?.professors||[]).flatMap(p=>(professorCache.get(p.id)?.questions||[]).filter(q=>!q.isPrediction&&Number.isFinite(Number(q.year))).map(q=>q.year)))].sort();
+    const years=[...new Set((subject?.professors||[]).flatMap(p=>(professorCache.get(p.id)?.questions||[]).filter(q=>!q.isPrediction&&!q.professorOnly&&Number.isFinite(Number(q.year))).map(q=>q.year)))].sort();
     const selected=new Set(day.targets||[]),p=goalProgress(plannerDate);
     const cards=dates.map(date=>{const a=goalProgress(date),event=EXAM_DAYS[date];
       return `<button type="button" class="goal-day ${date===plannerDate?'active':''} ${date===d?'today':''}" data-goal-date="${date}"><span>${date.slice(5)} ${['일','월','화','수','목','금','토'][new Date(date+'T12:00:00Z').getUTCDay()]}</span><strong>${a.total?a.pct+'%':'계획 없음'}</strong>${event?`<small>${esc(event)}</small>`:''}</button>`;}).join('');
@@ -1048,13 +1048,13 @@
     const subs=catalog.subjects;
     const selected=subjectById(selectedSubject);
     const profs=selected?.professors||[];
-    const yrs=[...new Set(profs.flatMap(p=>(professorCache.get(p.id)?.questions||[]).filter(q=>!q.isPrediction && Number.isFinite(Number(q.year))).map(q=>Number(q.year))))].sort((a,b)=>a-b);
+    const yrs=[...new Set(profs.flatMap(p=>(professorCache.get(p.id)?.questions||[]).filter(q=>!q.isPrediction&&!q.professorOnly && Number.isFinite(Number(q.year))).map(q=>Number(q.year))))].sort((a,b)=>a-b);
     return `<div class="home-selector-layout"><aside class="home-subjects"><div class="eyebrow">SUBJECTS · ${subs.length}</div>
       ${subs.map((s,i)=>`<button class="home-subject ${s.id===selectedSubject?'selected':''}" data-action="subject-home" data-id="${esc(s.id)}"><span class="home-subject-index">0${i+1}</span><span class="home-subject-label"><strong>${esc(s.name)}</strong><small>${s.professors.length?`${s.professors.length}명의 교수님`:'등록 예정'}</small></span><span class="home-subject-arrow">${s.id===selectedSubject?'●':'›'}</span></button>`).join('')}${renderLeaderboardPanel(selectedSubject)}</aside>
       <section class="home-pick-panel"><div class="home-pick-heading"><div><div class="eyebrow">${esc(selected?.name||'')} · SELECT STUDY MODE</div><h2>어떻게 공부할까요?</h2></div><div class="home-pick-tools"><span class="pill blue">${profs.length}명 등록</span><button class="button secondary small" data-action="open-goals">◎ 학습 목표</button><button class="home-today-goal" data-action="open-goals" title="오늘 학습목표 열기">${todayGoalStatusHTML()}</button></div></div>
       <div class="study-mode-tabs" role="tablist" aria-label="문제풀이 방식"><button role="tab" aria-selected="${homeStudyType==='professor'}" class="mode-tab ${homeStudyType==='professor'?'active':''}" data-action="home-mode" data-mode="professor">교수님별로 풀기</button><button role="tab" aria-selected="${homeStudyType==='unit'}" class="mode-tab ${homeStudyType==='unit'?'active':''}" data-action="home-mode" data-mode="unit">단원별로 풀기</button><button role="tab" aria-selected="${homeStudyType==='year'}" class="mode-tab ${homeStudyType==='year'?'active':''}" data-action="home-mode" data-mode="year">학번별로 풀기</button></div>
       ${!profs.length?`<div class="empty home-empty">아직 등록된 문제가 없는 과목입니다.</div>`:
-       homeStudyType==='professor'?`<p class="home-pick-hint">교수님을 선택하면 전체 또는 특정 학번 문제를 풀 수 있습니다.</p><div class="home-course-list">${profs.map(p=>courseCard(p)).join('')}${selectedSubject==='hematology-1'&&profs.some(p=>p.id==='lee-kanggyu')?predictionCard():''}</div>`:homeStudyType==='unit'?`<p class="home-pick-hint">교수님을 선택하면 하단에 해당 강의안 주제별 단원이 나타납니다. 단원별 기록은 독립적으로 저장됩니다.</p><div class="home-unit-prof-grid">${profs.map(p=>`<button class="home-unit-prof ${chosenUnitProfessor===p.id?'selected':''}" data-action="choose-unit-professor" data-id="${esc(p.id)}"><strong>${esc(p.name)} 교수님</strong><small>${unitGroups(p.id).length}개 단원</small></button>`).join('')}</div>${chosenUnitProfessor&&profs.some(p=>p.id===chosenUnitProfessor)?`<div class="unit-results-heading"><h3>${esc(profMeta(chosenUnitProfessor).name)} 교수님 단원 선택</h3><small>같은 교수님 전체 학습과는 별도 저장</small></div><div class="home-unit-grid">${unitGroups(chosenUnitProfessor).map(g=>{const a=stats(g.items,'unit');const pct=a.total?Math.round(100*a.completed/a.total):0;return `<button class="unit-card" data-action="start-unit" data-id="${esc(chosenUnitProfessor)}" data-unit="${esc(g.id)}"><strong>${esc(g.title)}</strong><small>${a.completed}/${a.total} 문제 · ${pct}% ${a.completed===a.total&&a.total?'✓':''}</small><span class="progress-track"><span class="progress-fill" style="width:${pct}%"></span></span></button>`}).join('')}</div>`:''}`:
+       homeStudyType==='professor'?`<p class="home-pick-hint">교수님을 선택하면 전체 또는 특정 학번 문제를 풀 수 있습니다.</p><div class="home-course-list">${profs.map(p=>courseCard(p)).join('')}${selectedSubject==='hematology-1'&&profs.some(p=>p.id==='lee-kanggyu')?predictionCard():''}</div>`:homeStudyType==='unit'?`<p class="home-pick-hint">교수님을 선택하면 하단에 해당 강의안 주제별 단원이 나타납니다. 단원별 기록은 독립적으로 저장됩니다.</p><div class="home-unit-prof-grid">${profs.filter(p=>!p.professorOnly).map(p=>`<button class="home-unit-prof ${chosenUnitProfessor===p.id?'selected':''}" data-action="choose-unit-professor" data-id="${esc(p.id)}"><strong>${esc(p.name)} 교수님</strong><small>${unitGroups(p.id).length}개 단원</small></button>`).join('')}</div>${chosenUnitProfessor&&profs.some(p=>p.id===chosenUnitProfessor)?`<div class="unit-results-heading"><h3>${esc(profMeta(chosenUnitProfessor).name)} 교수님 단원 선택</h3><small>같은 교수님 전체 학습과는 별도 저장</small></div><div class="home-unit-grid">${unitGroups(chosenUnitProfessor).map(g=>{const a=stats(g.items,'unit');const pct=a.total?Math.round(100*a.completed/a.total):0;return `<button class="unit-card" data-action="start-unit" data-id="${esc(chosenUnitProfessor)}" data-unit="${esc(g.id)}"><strong>${esc(g.title)}</strong><small>${a.completed}/${a.total} 문제 · ${pct}% ${a.completed===a.total&&a.total?'✓':''}</small><span class="progress-track"><span class="progress-fill" style="width:${pct}%"></span></span></button>`}).join('')}</div>`:''}`:
        `<p class="home-pick-hint">해당 학번의 모든 교수님 기출을 통합하여 풉니다. 완료하면 시험 결과를 확인할 수 있습니다.</p><div class="home-year-list">${yrs.map(year=>{const r=yearQuestionsForSubject(selectedSubject,year);const s=stats(r.items,'year-exam');const pct=s.total?Math.round(s.completed/s.total*100):0;const leaderboardBadge=String(year)==='22'?'<span class="year-special-badge">Leaderboard</span>':'';return `<button class="home-year-card ${s.total&&s.completed===s.total?'complete':s.completed?'partial':''}" data-action="start-year-exam" data-year="${year}" ${s.total?'':'disabled'}><span class="home-year-label"><strong>${year}학번 통합 기출 ${leaderboardBadge}</strong><small>${s.total}문항 · ${s.completed}문항 풀이 완료</small></span><span class="home-year-right"><strong>${pct}%${s.total&&s.completed===s.total?' ✓':''}</strong><span>${s.total?'시험 시작 →':'문항 없음'}</span></span><span class="home-year-progress"><i style="width:${pct}%"></i></span></button>`}).join('')}</div>`}
       <p class="home-disclaimer">학습 기록은 브라우저에 자동 저장됩니다. 교수님별·단원별·학번별·AI 예상문제의 제출 답안과 북마크는 모두 독립 저장됩니다.</p></section></div>`;
   }
@@ -1062,7 +1062,7 @@
     const data=professorCache.get(p.id);
     const s=professorCourseStats(p,data);
     const pct=s.total?Math.round(s.completed/s.total*100):0;
-    return `<button class="course-card" data-action="professor" data-id="${esc(p.id)}"><div class="course-big-icon">${esc(p.name.slice(0,1))}</div><div class="course-main"><h3>${esc(p.name)} 교수님 ${statusDot(professorCourseStage(p,data))}</h3><p>${s.total}문제 · ${s.unresolved}문항 정답 검토 필요</p><div class="progress-track"><div class="progress-fill ${s.total&&s.completed>=s.total?'done':''}" style="width:${pct}%"></div></div></div><div class="course-right"><strong>${pct}%</strong>${s.completed} / ${s.total} 완료</div></button>`;
+    return `<button class="course-card" data-action="professor" data-id="${esc(p.id)}"><div class="course-big-icon">${esc(p.name.slice(0,1))}</div><div class="course-main"><h3>${esc(p.displayName||`${p.name} 교수님`)} ${statusDot(professorCourseStage(p,data))}</h3><p>${s.total}문제 · ${s.unresolved}문항 정답 검토 필요</p><div class="progress-track"><div class="progress-fill ${s.total&&s.completed>=s.total?'done':''}" style="width:${pct}%"></div></div></div><div class="course-right"><strong>${pct}%</strong>${s.completed} / ${s.total} 완료</div></button>`;
   }
   function predictionCard(){
     const data=professorCache.get('lee-kanggyu');

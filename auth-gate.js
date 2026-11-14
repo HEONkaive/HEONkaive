@@ -8,12 +8,14 @@
   let started=false,booted=false,busy=false,recovering=false;
   const esc=s=>String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const device=()=>/iPad/i.test(navigator.userAgent)?'iPad':/iPhone/i.test(navigator.userAgent)?'iPhone':/Android/i.test(navigator.userAgent)?'Android':'컴퓨터';
+  // Login forms must remain enabled after an async auth status check.
+  // The `busy` flag already protects against duplicate submits inside handlers.
   function show(message='',kind='info',nickname=false){
     if(booted)return;
     root.className='heon-locked';
     root.innerHTML=`<main class="heon-access-card"><div class="heon-access-icon">H</div><div class="eyebrow">MEMBERS ONLY · HEON ARCHIVE</div><h1>회원 전용 학습 아카이브</h1><p>승인된 기존 회원만 기출문제와 강의안 자료를 열람할 수 있습니다. 신규 회원가입은 종료되었습니다.</p>
-    ${nickname?`<form id="heon-access-nickname"><label>처음 사용하는 학습용 아이디<input id="access-username" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" autocomplete="off" placeholder="영문·숫자·밑줄 3~24자"></label><button type="submit" ${busy?'disabled':''}>아이디 설정 후 입장</button></form>`:
-    `<form id="heon-access-login"><label>이메일<input id="access-email" type="email" required autocomplete="email" placeholder="가입된 이메일"></label><label>비밀번호<input id="access-password" type="password" required autocomplete="current-password" placeholder="비밀번호"></label><button type="submit" ${busy?'disabled':''}>기존 회원 로그인</button></form>`}
+    ${nickname?`<form id="heon-access-nickname"><label>처음 사용하는 학습용 아이디<input id="access-username" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" autocomplete="off" placeholder="영문·숫자·밑줄 3~24자"></label><button type="submit" >아이디 설정 후 입장</button></form>`:
+    `<form id="heon-access-login"><label>이메일<input id="access-email" type="email" required autocomplete="email" placeholder="가입된 이메일"></label><label>비밀번호<input id="access-password" type="password" required autocomplete="current-password" placeholder="비밀번호"></label><button type="submit" >기존 회원 로그인</button></form>`}
     <div class="heon-access-actions"><button type="button" id="heon-access-reset">비밀번호 재설정</button><button type="button" id="heon-access-logout">다른 계정으로 로그인</button></div>
     <p class="heon-access-message ${kind==='error'?'error':''}" role="status">${esc(message)}</p>
     <small>학습 기록·필기·북마크는 승인된 계정에 연결됩니다.</small></main>`;

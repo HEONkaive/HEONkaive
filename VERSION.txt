@@ -1,0 +1,4 @@
+1.3.4
+Base: HEONkaive(20261115-025639).zip / v1.3.3
+Date: 2026-11-16
+Scope: completed revisions only; full content audit not completed.

@@ -9,7 +9,7 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   const circles = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
   const TALLY_FORM_ID = '6DjZg5';
-  const PUBLIC_VERSION = '1.3.3';
+  const PUBLIC_VERSION = '1.3.4';
   const PUBLIC_RELEASE_DATE = '2026-11-14';
   const LEADERBOARD_IMAGE_BY_RANK = {1:'assets/ui/rank-first.png',2:'assets/ui/rank-second.png',3:'assets/ui/rank-third.png'};
   // Keep the underlying provenance, but omit internal answer-approval workflow from study copy.
@@ -34,7 +34,14 @@
       .replace(/사용자가 확인한/g,'확인한')
       .trim();
   }
-  function formatPrompt(value){return String(value||'').replace(/\s+(?=(?:Lab(?:oratory)?(?:\s+data|\s+results)?|검사\s*결과|혈액\s*검사|CBC)\s*[:：])/gi,'\n').replace(/\s+(?=(?:WBC|Hb|Hgb|Platelet|PLT|Na|K|Cr|BUN)\s*[:：]\s*\d)/g,'\n');}
+  function formatPrompt(value) {
+    return String(value || '')
+      .replace(/[ \t]*(<\s*검사\s*결과\s*>)[ \t]*/g, '\n\n$1\n')
+      .replace(/[ \t]+(?=(?:Lab(?:oratory)?(?:\s+data|\s+results)?|검사\s*결과|혈액\s*검사|CBC)\s*[:：])/gi, '\n')
+      .replace(/[ \t]+(?=(?:혈액|소변|WBC|Hb|Hgb|Platelet|PLT|Na|K|Cr|BUN)\s*[:：])/g, '\n')
+      .replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   function studyAiExplanation(q) {
     const txt=studyCopy(q.aiExplanation||'');
     if(q.choiceExplanations && (/사용자 요청|정답 확정|형광펜|이 문항\(/.test(txt) || txt.startsWith('판단 포인트:')))return ''; 

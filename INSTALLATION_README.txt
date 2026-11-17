@@ -1,0 +1,1 @@
+HEON ARCHIVE v1.3.5 GitHub patch. First deploy SUCCESS from Supabase patch then replace these files at GitHub Pages repository ROOT. Do NOT upload data/, assets/evidence/, admin archive, or private patch to GitHub. If deploying new GitHub repo instead use GitHub public full ZIP.

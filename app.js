@@ -73,16 +73,16 @@
   const questionContentOverrides=new Map();
   let questionContentOwner='',questionContentLoading=false,questionContentRefreshAt=0;
   let questionEditMenuId='',questionEditingId='',questionEditingMode='';
-  let questionDraftPrompt='',questionDraftChoices={};
+  let questionDraftPrompt='',questionDraftChoices={},questionDraftChoiceOrder=[];
   let contentSaving=false, supplementalDraft=null;
   const supplementalFiles=new Map();
-  const CONTENT_KEYS=['prompt','choices','choiceExplanations','evidence','candidateEvidence','archiveLectureImages','manualEvidence'];
+  const CONTENT_KEYS=['prompt','choices','choiceExplanations','evidence','candidateEvidence','archiveLectureImages','archiveCorrectionText','manualEvidence'];
   const copyJson=value=>JSON.parse(JSON.stringify(value));
   function questionBaseContent(q){
     if(!Object.prototype.hasOwnProperty.call(q,'__heonBaseContent')){
       const original={prompt:q.prompt||'',choices:q.choices||[],choiceExplanations:q.choiceExplanations||{},
         evidence:q.evidence||[],candidateEvidence:q.candidateEvidence||[],
-        archiveLectureImages:q.archivePdf?.lectureImages||[],manualEvidence:[]};
+        archiveLectureImages:q.archivePdf?.lectureImages||[],archiveCorrectionText:q.archivePdf?.correctionText??'',manualEvidence:[]};
       Object.defineProperty(q,'__heonBaseContent',{value:copyJson(original),enumerable:false,configurable:false});
     }
     return q.__heonBaseContent;
@@ -94,6 +94,8 @@
       const value=Object.prototype.hasOwnProperty.call(edited,key)?edited[key]:base[key];
       if(key==='archiveLectureImages'){
         if(q.archivePdf)q.archivePdf.lectureImages=copyJson(value||[]);
+      }else if(key==='archiveCorrectionText'){
+        if(q.archivePdf)q.archivePdf.correctionText=String(value??'');
       }else q[key]=copyJson(value);
     }
   }
@@ -155,13 +157,16 @@
     if(editing && questionEditingMode==='prompt'){
       form=`<label for="master-question-prompt">제시문 수정</label><textarea id="master-question-prompt" rows="8" maxlength="30000" spellcheck="false">${esc(questionDraftPrompt)}</textarea>`;
     }else if(editing && questionEditingMode==='choices'){
-      form=`<strong>선택지 수정</strong><p class="fine">선택지 번호와 정답은 변경되지 않습니다.</p>${(q.choices||[]).map(ch=>
-        `<label for="master-choice-${ch.number}">${circles[ch.number-1]||ch.number}번 선택지</label><textarea id="master-choice-${ch.number}" data-choice-editor="${ch.number}" rows="2" maxlength="15000">${esc(questionDraftChoices[String(ch.number)]??ch.text)}</textarea>`).join('')}`;
+      form=`<strong>선택지 수정</strong><p class="fine">기존 선택지 번호와 정답은 유지됩니다. 새 선택지는 최대 10번까지 추가할 수 있습니다.</p>${questionDraftChoiceOrder.map(number=>{
+        const original=(q.choices||[]).find(ch=>Number(ch.number)===number);
+        return `<label for="master-choice-${number}">${circles[number-1]||number}번 선택지${original?'':' · 새 선택지'}</label><textarea id="master-choice-${number}" data-choice-editor="${number}" rows="2" maxlength="15000" placeholder="선택지 내용을 입력하세요">${esc(questionDraftChoices[String(number)]??original?.text??'')}</textarea>`;
+      }).join('')}`;
     }
     if(!menu&&!form)return '';
+    const canAddChoice=questionDraftChoiceOrder.length<10 && questionDraftChoiceOrder.some(n=>n>=1&&n<=10);
     return `<section class="master-question-tools">
       ${menu?`<div class="master-question-menu"><button class="button secondary small" data-action="master-question-start" data-mode="prompt">제시문 수정</button><button class="button secondary small" data-action="master-question-start" data-mode="choices" ${!q.choices?.length?'disabled':''}>선택지 수정</button></div>`:''}
-      ${form?`<div class="master-edit-form">${form}<div class="master-edit-actions"><button class="button small" data-action="master-question-save" ${contentSaving?'disabled':''}>변경사항 저장</button><button class="button secondary small" data-action="master-question-cancel">취소</button></div></div>`:''}
+      ${form?`<div class="master-edit-form">${form}<div class="master-edit-actions"><button class="button small" data-action="master-question-save" ${contentSaving?'disabled':''}>변경사항 저장</button>${questionEditingMode==='choices'?`<button class="button secondary small" data-action="master-choice-add" ${canAddChoice&&!contentSaving?'':'disabled'}>＋ 선택지 추가</button>`:''}<button class="button secondary small" data-action="master-question-cancel">취소</button></div></div>`:''}
     </section>`;
   }
   async function saveMasterQuestion(){
@@ -172,12 +177,18 @@
       if(!value||value.length>30000){toast('제시문은 1~30,000자로 입력해주세요.');return;}
       patch={prompt:value};
     }else if(questionEditingMode==='choices'){
-      const choices=(q.choices||[]).map(ch=>({...ch,text:String(root.querySelector(`[data-choice-editor="${ch.number}"]`)?.value??ch.text).trim()}));
-      if(!choices.length||choices.some(ch=>!ch.text||ch.text.length>15000)){toast('각 선택지를 1~15,000자로 입력해주세요.');return;}
+      const choices=questionDraftChoiceOrder.map(number=>{
+        const original=(q.choices||[]).find(ch=>Number(ch.number)===number);
+        return {...(original||{number}),text:String(root.querySelector(`[data-choice-editor="${number}"]`)?.value??questionDraftChoices[String(number)]??original?.text??'').trim()};
+      });
+      if(!choices.length||choices.length>10||new Set(choices.map(ch=>Number(ch.number))).size!==choices.length||
+        choices.some(ch=>!Number.isInteger(Number(ch.number))||ch.number<1||ch.number>10||!ch.text||ch.text.length>15000)){
+        toast('선택지는 1~10번까지, 각 내용은 1~15,000자로 입력해주세요.');return;
+      }
       patch={choices};
     }else return;
     if(await saveQuestionPatch(q,patch)){
-      questionEditingId='';questionEditingMode='';questionEditMenuId='';render();toast('문항 수정 내용이 모든 회원에게 반영되었습니다.');
+      questionEditingId='';questionEditingMode='';questionEditMenuId='';questionDraftChoiceOrder=[];questionDraftChoices={};render();toast('문항 수정 내용이 모든 회원에게 반영되었습니다.');
     }
   }
   function getEditableEvidence(q){
@@ -192,7 +203,8 @@
   function beginSupplementalEditor(q){
     const ed=getEditableEvidence(q);
     supplementalDraft={questionId:q.id,existingKey:ed.key,existing:copyJson(ed.items),
-      manual:copyJson(q.manualEvidence||[]),reasons:copyJson(q.choiceExplanations||{})};
+      manual:copyJson(q.manualEvidence||[]),reasons:copyJson(q.choiceExplanations||{}),
+      archiveCorrectionText:String(q.archivePdf?.correctionText??''),archiveCorrectionDeleted:false,archiveCorrectionBackup:''};
     supplementalFiles.clear();
   }
   function reasonEditorHTML(q){
@@ -207,6 +219,22 @@
       <div class="master-add-row"><select id="master-next-reason" class="select" aria-label="새로 추가할 선택지 번호">${allowed.map(n=>`<option value="${n}">${circles[n-1]||n} · ${n}번</option>`).join('')}</select>
       <button class="button secondary small" data-action="master-reason-add" ${allowed.length?'':'disabled'}>선택지별 해설박스 추가하기 · 다음 번호 추가</button></div>
       <button class="button small" data-action="master-supplemental-save" ${contentSaving?'disabled':''}>선택지별 해설·강의안 변경사항 저장</button></section>`;
+  }
+  // PDF-sourced correction is a separate box from option-by-option explanations.
+  // Blank text is an explicit persisted hide/delete, not a change to the source PDF.
+  function archiveCorrectionEditorHTML(q){
+    if(!q.archivePdf||!supplementalDraft||supplementalDraft.questionId!==q.id)return '';
+    const d=supplementalDraft;
+    const deleted=d.archiveCorrectionDeleted;
+    return `<section class="master-editor-section master-archive-correction-editor">
+      <h4>나머지 보기 · PDF 원문 정정 수정</h4>
+      <p class="fine">이 박스는 선택지별 해설과 별도로 수정하거나 삭제할 수 있습니다. 삭제해도 원본 PDF 및 선택지별 해설은 유지됩니다.</p>
+      ${deleted?`<p class="fine master-correction-deleted">저장하면 ‘나머지 보기 · PDF 원문 정정’ 박스가 화면에서 삭제됩니다.</p>
+        <button class="button secondary small" data-action="master-archive-correction-undo">삭제 취소</button>`:
+        `<label for="master-archive-correction-text">박스 내용</label>
+        <textarea id="master-archive-correction-text" rows="4" maxlength="30000" spellcheck="false" placeholder="원문 정정 내용을 입력하세요.">${esc(d.archiveCorrectionText)}</textarea>
+        <button class="button ghost small" data-action="master-archive-correction-remove" ${d.archiveCorrectionText.trim()?'':'disabled'}>이 박스 삭제</button>`}
+    </section>`;
   }
   function evidenceEditorItem(item,index,manual){
     const key=`${manual?'manual':'existing'}:${index}`;
@@ -238,6 +266,10 @@
       if(item)item[el.dataset.evidenceField]=el.value;
     }
     explanationDraft=String(root.querySelector('#master-explanation-text')?.value??explanationDraft);
+    if(!supplementalDraft.archiveCorrectionDeleted){
+      const editor=root.querySelector('#master-archive-correction-text');
+      if(editor)supplementalDraft.archiveCorrectionText=editor.value;
+    }
   }
   function manualEvidenceHTML(q){
     if(!masterCanEditExplanation()&&!(q.manualEvidence||[]).some(x=>x.image||x.src))return '';
@@ -296,8 +328,10 @@
         supplementalFiles.delete(key);
       }
       const changed={choiceExplanations:reasons,[d.existingKey]:copyJson(d.existing),manualEvidence:copyJson(d.manual)};
+      if(q.archivePdf)changed.archiveCorrectionText=String(d.archiveCorrectionText??'');
       const editedContent=Object.entries(changed).some(([key,value])=>
-        JSON.stringify(value)!==JSON.stringify(key==='archiveLectureImages'?(q.archivePdf?.lectureImages||[]):(q[key]||((key==='choiceExplanations')?{}:[]))));
+        JSON.stringify(value)!==JSON.stringify(key==='archiveLectureImages'?(q.archivePdf?.lectureImages||[]):
+          key==='archiveCorrectionText'?(q.archivePdf?.correctionText??''):(q[key]||((key==='choiceExplanations')?{}:[]))));
       if(editedContent){
         if(!await saveQuestionPatch(q,changed))return; // preserve editor after failed RPC
         contentPublished=true;
@@ -390,7 +424,7 @@
         <button class="button secondary small" data-action="master-explanation-history" ${explanationSaving?'disabled':''}>수정 기록</button>
       </div>
       ${explanationHistoryOpen?`<div style="margin-top:12px"><strong>수정 기록 · 이전 버전 복원</strong>${entries||'<p class="fine">아직 기록이 없습니다.</p>'}</div>`:''}
-      ${supplementalDraft?.questionId===q.id?reasonEditorHTML(q)+evidenceEditorHTML(q):''}
+      ${supplementalDraft?.questionId===q.id?reasonEditorHTML(q)+archiveCorrectionEditorHTML(q)+evidenceEditorHTML(q):''}
     </section>`;
   }
   function installMasterExplanationEditor(q,card){
@@ -1992,9 +2026,24 @@
         const q=currentQuestion();if(!q||!masterCanEditExplanation())break;
         questionEditingId=q.id;questionEditingMode=btn.dataset.mode;
         questionDraftPrompt=String(q.prompt||'');questionDraftChoices=Object.fromEntries((q.choices||[]).map(ch=>[String(ch.number),ch.text]));
+        questionDraftChoiceOrder=(q.choices||[]).map(ch=>Number(ch.number));
         render();root.querySelector('#master-question-prompt,[data-choice-editor]')?.focus();break;
       }
-      case 'master-question-cancel':questionEditingId='';questionEditingMode='';render();break;
+      case 'master-choice-add':{
+        const q=currentQuestion();if(!q||q.id!==questionEditingId||questionEditingMode!=='choices'||!masterCanEditExplanation()||contentSaving)break;
+        if(questionDraftChoiceOrder.length>=10){toast('선택지는 최대 10개까지 추가할 수 있습니다.');break;}
+        // Use the next numbered option; never renumber or overwrite existing choices.
+        const used=new Set(questionDraftChoiceOrder);
+        const last=Math.max(0,...used);
+        const number=(last<10?last+1:Array.from({length:10},(_,i)=>i+1).find(n=>!used.has(n)));
+        if(!number||used.has(number)){toast('추가할 선택지 번호가 없습니다.');break;}
+        // Preserve every unsaved edit when re-rendering the form.
+        root.querySelectorAll('[data-choice-editor]').forEach(el=>{questionDraftChoices[el.dataset.choiceEditor]=el.value;});
+        questionDraftChoiceOrder.push(number);
+        questionDraftChoices[String(number)]='';
+        render();root.querySelector(`[data-choice-editor="${number}"]`)?.focus();break;
+      }
+      case 'master-question-cancel':questionEditingId='';questionEditingMode='';questionDraftChoiceOrder=[];questionDraftChoices={};render();break;
       case 'master-question-save':await saveMasterQuestion();break;
       case 'master-evidence-quick-add':{
         const q=currentQuestion();if(!q||!masterCanEditExplanation())break;
@@ -2028,6 +2077,19 @@
       case 'master-reason-remove':{
         if(!masterCanEditExplanation()||!supplementalDraft)break;
         syncSupplementalFields();delete supplementalDraft.reasons[String(btn.dataset.number)];render();break;
+      }
+      case 'master-archive-correction-remove':{
+        const q=currentEditingQuestion();if(!q?.archivePdf||!masterCanEditExplanation()||!supplementalDraft||explanationSaving)break;
+        syncSupplementalFields();
+        if(!confirm('‘나머지 보기 · PDF 원문 정정’ 박스를 삭제할까요? 저장 전에는 반영되지 않습니다.'))break;
+        supplementalDraft.archiveCorrectionBackup=supplementalDraft.archiveCorrectionText;
+        supplementalDraft.archiveCorrectionText='';supplementalDraft.archiveCorrectionDeleted=true;
+        render();break;
+      }
+      case 'master-archive-correction-undo':{
+        const q=currentEditingQuestion();if(!q?.archivePdf||!masterCanEditExplanation()||!supplementalDraft||explanationSaving)break;
+        syncSupplementalFields();supplementalDraft.archiveCorrectionText=supplementalDraft.archiveCorrectionBackup;
+        supplementalDraft.archiveCorrectionDeleted=false;render();break;
       }
       case 'master-supplemental-save':await saveSupplementalContent();break;
       case 'master-explanation-edit':{
@@ -2183,6 +2245,7 @@
     if(el.id==='master-question-prompt'){questionDraftPrompt=el.value;return;}
     if(el.dataset.choiceEditor){questionDraftChoices[el.dataset.choiceEditor]=el.value;return;}
     if(el.dataset.masterReason&&supplementalDraft){supplementalDraft.reasons[el.dataset.masterReason]=el.value;return;}
+    if(el.id==='master-archive-correction-text'&&supplementalDraft){supplementalDraft.archiveCorrectionText=el.value;return;}
     if(el.dataset.evidenceField&&supplementalDraft){
       const arr=el.dataset.evidenceKind==='manual'?supplementalDraft.manual:supplementalDraft.existing;
       if(arr?.[Number(el.dataset.index)])arr[Number(el.dataset.index)][el.dataset.evidenceField]=el.value;

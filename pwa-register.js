@@ -1,6 +1,6 @@
 /* v1.1.2 · Installable iPadOS PWA. iPad: Safari → Share → Add to Home Screen. */
 if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('./sw.js?v=1.4.1-reasons-fix',{scope:'./'}).catch(error=>console.warn('PWA service worker:',error));
+    navigator.serviceWorker.register('./sw.js?v=1.4.1-choice-add-pdf-correction',{scope:'./'}).catch(error=>console.warn('PWA service worker:',error));
   });
 }

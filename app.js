@@ -9,7 +9,7 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   const circles = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
   const TALLY_FORM_ID = '6DjZg5';
-  const PUBLIC_VERSION = '1.4.0';
+  const PUBLIC_VERSION = '1.4.1';
   const PUBLIC_RELEASE_DATE = '2026-11-22';
   const LEADERBOARD_IMAGE_BY_RANK = {1:'assets/ui/rank-first.png',2:'assets/ui/rank-second.png',3:'assets/ui/rank-third.png'};
   // Keep the underlying provenance, but omit internal answer-approval workflow from study copy.
@@ -56,12 +56,236 @@
     return studyCopy(raw);
   }
   function choiceReasonList(q) {
-    if (!q.choiceExplanations || !Object.keys(q.choiceExplanations).length || !q.choices?.length) return '';
-    return `<section class="choice-reason-list"><h4>선택지별 해설</h4>${q.choices.map(ch=>{
-       const answer=effectiveAnswer(q), right=answer!=null && (Array.isArray(answer)?answer.includes(ch.number):answer===ch.number);
-       const reason=q.choiceExplanations[String(ch.number)] || '이 선택지를 판단할 직접 근거를 충분히 확보하지 못했습니다.';
-       return `<div class="choice-reason ${right?'right':''}"><p><b>${circles[ch.number-1]||ch.number}</b> ${esc(studyCopy(reason))}</p></div>`;
+    if (!q.choiceExplanations) return '';
+    const provided=Object.entries(q.choiceExplanations)
+      .filter(([number,reason])=>Number.isInteger(Number(number)) && Number(number)>0 && Number(number)<=10 && String(reason||'').trim())
+      .sort(([a],[b])=>Number(a)-Number(b));
+    if(!provided.length)return '';
+    return `<section class="choice-reason-list"><h4>선택지별 해설</h4>${provided.map(([number,reason])=>{
+      const n=Number(number),answer=effectiveAnswer(q);
+      const right=answer!=null&&(Array.isArray(answer)?answer.includes(n):answer===n);
+      return `<div class="choice-reason ${right?'right':''}"><p><b>${circles[n-1]||n}</b> ${esc(studyCopy(reason))}</p></div>`;
     }).join('')}</section>`;
+  }
+
+  // v1.4.1: published content corrections are separate from immutable answer keys,
+  // original lecture data, ink and every student's recorded answers.
+  const questionContentOverrides=new Map();
+  let questionContentOwner='',questionContentLoading=false,questionContentRefreshAt=0;
+  let questionEditMenuId='',questionEditingId='',questionEditingMode='';
+  let questionDraftPrompt='',questionDraftChoices={};
+  let contentSaving=false, supplementalDraft=null;
+  const supplementalFiles=new Map();
+  const CONTENT_KEYS=['prompt','choices','choiceExplanations','evidence','candidateEvidence','archiveLectureImages','manualEvidence'];
+  const copyJson=value=>JSON.parse(JSON.stringify(value));
+  function questionBaseContent(q){
+    if(!Object.prototype.hasOwnProperty.call(q,'__heonBaseContent')){
+      const original={prompt:q.prompt||'',choices:q.choices||[],choiceExplanations:q.choiceExplanations||{},
+        evidence:q.evidence||[],candidateEvidence:q.candidateEvidence||[],
+        archiveLectureImages:q.archivePdf?.lectureImages||[],manualEvidence:[]};
+      Object.defineProperty(q,'__heonBaseContent',{value:copyJson(original),enumerable:false,configurable:false});
+    }
+    return q.__heonBaseContent;
+  }
+  function applyQuestionContent(q){
+    if(!q?.id)return;
+    const base=questionBaseContent(q),edited=questionContentOverrides.get(q.id)?.payload||{};
+    for(const key of CONTENT_KEYS){
+      const value=Object.prototype.hasOwnProperty.call(edited,key)?edited[key]:base[key];
+      if(key==='archiveLectureImages'){
+        if(q.archivePdf)q.archivePdf.lectureImages=copyJson(value||[]);
+      }else q[key]=copyJson(value);
+    }
+  }
+  function applyAllQuestionContent(){
+    for(const doc of professorCache.values())for(const q of doc.questions||[])applyQuestionContent(q);
+  }
+  async function loadSharedQuestionContent(force=false){
+    const account=window.HeonStudyAccount,uid=account?.userId;
+    if(!uid||!account.active||questionContentLoading||(!force&&(questionContentOwner===uid||Date.now()-questionContentRefreshAt<60000)))return;
+    questionContentLoading=true;questionContentRefreshAt=Date.now();
+    try{
+      const {data,error}=await account.client.rpc('heon_editor_list_question_overrides');
+      if(error)throw error;
+      if(window.HeonStudyAccount?.userId!==uid)return;
+      questionContentOverrides.clear();
+      for(const item of data||[]){
+        if(item&&item.question_id)questionContentOverrides.set(item.question_id,{
+          payload:item.payload||{},revision:Number(item.revision||0)
+        });
+      }
+      questionContentOwner=uid;questionContentRefreshAt=Date.now();
+      applyAllQuestionContent();if(catalog)render();
+    }catch(error){
+      console.warn('문항 편집 내용을 읽지 못했습니다.',error.message||error);
+      if(masterCanEditExplanation() && /function|schema cache|does not exist|not found|permission/i.test(String(error.message||'')))
+        toast('Supabase에 v1.4.1 문항 편집 SQL을 먼저 설치해야 합니다.');
+    }finally{questionContentLoading=false;}
+  }
+  async function saveQuestionPatch(q,changed){
+    if(!q||!masterCanEditExplanation()||contentSaving)return false;
+    const before=questionContentOverrides.get(q.id)||{payload:{},revision:0};
+    const payload={...copyJson(before.payload),...copyJson(changed)};
+    contentSaving=true;
+    try{
+      const {data,error}=await window.HeonStudyAccount.client.rpc('heon_editor_save_question_override',{
+        p_question_id:q.id,p_payload:payload,p_expected_revision:before.revision
+      });
+      if(error)throw error;
+      const saved=Array.isArray(data)?data[0]:data;
+      questionContentOverrides.set(q.id,{payload:saved?.payload||payload,revision:Number(saved?.revision||before.revision+1)});
+      applyAllQuestionContent();return true;
+    }catch(error){
+      toast(/REVISION_CONFLICT/.test(String(error.message))?'다른 수정본이 먼저 저장되었습니다. 새로고침 후 다시 수정해주세요.':
+        '문항 변경사항 저장 실패: '+String(error.message||error).slice(0,150));
+      return false;
+    }finally{contentSaving=false;}
+  }
+  function masterQuestionTools(q){
+    if(!masterCanEditExplanation())return '';
+    const menu=questionEditMenuId===q.id;
+    const editing=questionEditingId===q.id;
+    let form='';
+    if(editing && questionEditingMode==='prompt'){
+      form=`<label for="master-question-prompt">제시문 수정</label><textarea id="master-question-prompt" rows="8" maxlength="30000" spellcheck="false">${esc(questionDraftPrompt)}</textarea>`;
+    }else if(editing && questionEditingMode==='choices'){
+      form=`<strong>선택지 수정</strong><p class="fine">선택지 번호와 정답은 변경되지 않습니다.</p>${(q.choices||[]).map(ch=>
+        `<label for="master-choice-${ch.number}">${circles[ch.number-1]||ch.number}번 선택지</label><textarea id="master-choice-${ch.number}" data-choice-editor="${ch.number}" rows="2" maxlength="15000">${esc(questionDraftChoices[String(ch.number)]??ch.text)}</textarea>`).join('')}`;
+    }
+    return `<section class="master-question-tools"><button class="button secondary small" data-action="master-question-menu">✎ 문항 수정</button>
+      ${menu?`<div class="master-question-menu"><button class="button secondary small" data-action="master-question-start" data-mode="prompt">제시문 수정</button><button class="button secondary small" data-action="master-question-start" data-mode="choices" ${!q.choices?.length?'disabled':''}>선택지 수정</button></div>`:''}
+      ${form?`<div class="master-edit-form">${form}<div class="master-edit-actions"><button class="button small" data-action="master-question-save" ${contentSaving?'disabled':''}>변경사항 저장</button><button class="button secondary small" data-action="master-question-cancel">취소</button></div></div>`:''}
+    </section>`;
+  }
+  async function saveMasterQuestion(){
+    const q=currentQuestion();if(!q||q.id!==questionEditingId||!masterCanEditExplanation())return;
+    let patch;
+    if(questionEditingMode==='prompt'){
+      const value=String(root.querySelector('#master-question-prompt')?.value||'').trim();
+      if(!value||value.length>30000){toast('제시문은 1~30,000자로 입력해주세요.');return;}
+      patch={prompt:value};
+    }else if(questionEditingMode==='choices'){
+      const choices=(q.choices||[]).map(ch=>({...ch,text:String(root.querySelector(`[data-choice-editor="${ch.number}"]`)?.value??ch.text).trim()}));
+      if(!choices.length||choices.some(ch=>!ch.text||ch.text.length>15000)){toast('각 선택지를 1~15,000자로 입력해주세요.');return;}
+      patch={choices};
+    }else return;
+    if(await saveQuestionPatch(q,patch)){
+      questionEditingId='';questionEditingMode='';questionEditMenuId='';render();toast('문항 수정 내용이 모든 회원에게 반영되었습니다.');
+    }
+  }
+  function getEditableEvidence(q){
+    if(q.archivePdf)return {key:'archiveLectureImages',items:q.archivePdf.lectureImages||[]};
+    if(q.lectureAudit)return {key:'evidence',items:q.evidence||[]};
+    const accepted=q.validation?.stage==='accepted';
+    const sourceMatch=q.validation?.stage==='user_confirmed' && q.validation?.supplemental2026?.status==='match';
+    const userEvidence=Array.isArray(q.evidence)&&q.evidence.length>0;
+    const key=accepted||sourceMatch||(q.validation?.stage==='user_confirmed'&&userEvidence)?'evidence':'candidateEvidence';
+    return {key,items:q[key]||[]};
+  }
+  function beginSupplementalEditor(q){
+    const ed=getEditableEvidence(q);
+    supplementalDraft={questionId:q.id,existingKey:ed.key,existing:copyJson(ed.items),
+      manual:copyJson(q.manualEvidence||[]),reasons:copyJson(q.choiceExplanations||{})};
+    supplementalFiles.clear();
+  }
+  function reasonEditorHTML(q){
+    const entries=Object.entries(supplementalDraft.reasons)
+      .filter(([number,value])=>Number.isInteger(Number(number))&&Number(number)>0&&Number(number)<=10)
+      .sort(([a],[b])=>Number(a)-Number(b));
+    const allowed=(q.choices?.length?q.choices.map(c=>Number(c.number)):Array.from({length:Math.min(10,Number(q.imageChoiceCount)||5)},(_,i)=>i+1))
+      .filter(n=>Number.isInteger(n)&&n>0&&n<=10&&!Object.prototype.hasOwnProperty.call(supplementalDraft.reasons,String(n)));
+    return `<section class="master-editor-section"><h4>선택지별 해설 수정</h4><p class="fine">필요한 번호만 추가할 수 있습니다. 추가된 해설은 번호별 구분선으로 표시됩니다.</p>
+      ${entries.map(([number,reason])=>`<div class="master-reason-row"><div class="master-editor-row-head"><b>${circles[Number(number)-1]||number} · ${number}번 선택지</b><button class="button ghost tiny" data-action="master-reason-remove" data-number="${number}">삭제</button></div>
+      <textarea rows="3" maxlength="15000" data-master-reason="${number}" aria-label="${number}번 선택지 해설">${esc(reason)}</textarea></div>`).join('')}
+      <div class="master-add-row"><select id="master-next-reason" class="select" aria-label="새로 추가할 선택지 번호">${allowed.map(n=>`<option value="${n}">${circles[n-1]||n} · ${n}번</option>`).join('')}</select>
+      <button class="button secondary small" data-action="master-reason-add" ${allowed.length?'':'disabled'}>선택지별 해설박스 추가하기 · 다음 번호 추가</button></div>
+      <button class="button small" data-action="master-supplemental-save" ${contentSaving?'disabled':''}>선택지별 해설·강의안 변경사항 저장</button></section>`;
+  }
+  function evidenceEditorItem(item,index,manual){
+    const key=`${manual?'manual':'existing'}:${index}`;
+    const path=item.image||item.src||'';
+    const pathLabel=path?`<small class="master-image-path">${esc(path)}</small>`:'<small>아직 이미지가 없습니다.</small>';
+    return `<article class="master-evidence-edit" data-evidence-key="${key}">
+      <div class="master-editor-row-head"><b>${manual?'새 첨부 네모박스':'기존 강의안 근거'} ${index+1}</b><button class="button ghost tiny" data-action="master-evidence-remove" data-kind="${manual?'manual':'existing'}" data-index="${index}">박스 삭제</button></div>
+      ${pathLabel}
+      <label>강의안 이름<input type="text" maxlength="500" data-evidence-field="file" data-evidence-kind="${manual?'manual':'existing'}" data-index="${index}" value="${esc(item.file||'')}"></label>
+      <label>페이지 (직접 입력)<input type="text" maxlength="100" data-evidence-field="page" data-evidence-kind="${manual?'manual':'existing'}" data-index="${index}" value="${esc(item.page??'')}"></label>
+      <label>강의안 이미지 첨부·교체<input type="file" accept="image/png,image/jpeg,image/webp" data-upload-key="${key}"></label>
+      <span class="master-upload-status" data-upload-status="${key}">${supplementalFiles.has(key)?'새 이미지 선택됨 · 저장 시 업로드':'파일을 선택한 뒤 변경사항 저장을 누르세요.'}</span>
+    </article>`;
+  }
+  function evidenceEditorHTML(q){
+    const d=supplementalDraft;
+    return `<section class="master-editor-section"><h4>첨부 강의안 수정 및 추가</h4><p class="fine">기존 이미지의 파일·페이지 수정과 새 이미지 교체가 가능합니다. 새 박스는 최대 4개입니다. 기존 이미지가 5개 이상인 문항은 유지합니다.</p>
+      ${d.existing.map((v,i)=>evidenceEditorItem(v,i,false)).join('')}
+      ${d.manual.map((v,i)=>evidenceEditorItem(v,i,true)).join('')}
+      <button class="button secondary small" data-action="master-evidence-add" ${d.manual.length>=4?'disabled':''}>▧ 네모박스 생성하기 (${d.manual.length}/4)</button>
+      <button class="button small" data-action="master-supplemental-save" ${contentSaving?'disabled':''}>강의안·선택지별 해설 변경사항 저장</button></section>`;
+  }
+  function syncSupplementalFields(){
+    if(!supplementalDraft)return;
+    for(const el of root.querySelectorAll('[data-master-reason]'))supplementalDraft.reasons[el.dataset.masterReason]=el.value;
+    for(const el of root.querySelectorAll('[data-evidence-field]')){
+      const arr=el.dataset.evidenceKind==='manual'?supplementalDraft.manual:supplementalDraft.existing;
+      const item=arr?.[Number(el.dataset.index)];
+      if(item)item[el.dataset.evidenceField]=el.value;
+    }
+    explanationDraft=String(root.querySelector('#master-explanation-text')?.value??explanationDraft);
+  }
+  function manualEvidenceHTML(q){
+    if(!masterCanEditExplanation()&&!(q.manualEvidence||[]).some(x=>x.image||x.src))return '';
+    const items=(q.manualEvidence||[]).filter(x=>x.image||x.src||masterCanEditExplanation());
+    return `<section class="master-manual-evidence"><div class="section-head"><h4 class="section-title">추가 강의안 첨부</h4><span class="fine">${(q.manualEvidence||[]).filter(x=>x.image||x.src).length}개</span></div>
+      ${items.map((item,i)=>item.image||item.src?`<article class="evidence-item"><div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">${esc(item.page?'PDF '+item.page+'쪽':'페이지 미입력')}</span><span class="file-name">${esc(item.file||'관리자 직접 첨부 강의안')}</span></div></div><img class="evidence-image" src="${esc(item.image||item.src)}" alt="${esc(item.file||'추가 강의안 원본')}" loading="lazy" data-action="zoom" data-caption="${esc(item.file||'추가 강의안')} · ${esc(item.page||'페이지 미입력')}"><div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`:
+        `<div class="master-empty-lecture-box">강의안 이미지 미첨부 · 해설 수정에서 파일을 등록하세요.</div>`).join('')}
+      ${masterCanEditExplanation()&&(q.manualEvidence||[]).length<4?`<button class="button secondary small" data-action="master-evidence-quick-add">▧ 네모박스 생성하기 (${(q.manualEvidence||[]).length}/4)</button>`:''}
+    </section>`;
+  }
+  async function saveSupplementalContent(){
+    const q=currentEditingQuestion();if(!q||!supplementalDraft||supplementalDraft.questionId!==q.id||contentSaving)return;
+    syncSupplementalFields();
+    const d=supplementalDraft;
+    if(d.manual.length>4){toast('새 강의안 박스는 최대 4개입니다.');return;}
+    const reasons={};
+    for(const [number,raw] of Object.entries(d.reasons)){
+      const value=String(raw||'').trim();if(!value)continue;
+      if(!/^(10|[1-9])$/.test(number)||value.length>15000){toast('선택지 해설 번호 또는 길이를 확인해주세요.');return;}
+      reasons[number]=value;
+    }
+    for(const item of [...d.existing,...d.manual]){
+      if(String(item.file||'').length>500||String(item.page??'').length>100){toast('강의안 제목이나 페이지 입력이 너무 깁니다.');return;}
+    }
+    contentSaving=true;
+    // Upload each file to the *private* member-protected bucket before publishing its path.
+    const files=[...supplementalFiles.entries()];
+    try{
+      for(const [key,file] of files){
+        if(!file)continue;
+        if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>10*1024*1024||!file.size)
+          throw Error('PNG/JPG/WEBP 이미지(10MB 이하)만 첨부할 수 있습니다.');
+        const [kind,indexText]=key.split(':'),index=Number(indexText);
+        const arr=kind==='manual'?d.manual:d.existing,item=arr[index];
+        if(!item)continue;
+        const ext={'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}[file.type];
+        const safeId=Array.from(new TextEncoder().encode(q.id)).slice(0,130).map(x=>x.toString(16).padStart(2,'0')).join('');
+        const uploadId=window.crypto?.randomUUID?.() || Array.from(window.crypto.getRandomValues(new Uint8Array(16))).map(x=>x.toString(16).padStart(2,'0')).join('');
+        const safeName=`assets/evidence/manual/v1.4.1/${safeId}/${uploadId}.${ext}`;
+        const {error}=await window.HeonStudyAccount.client.storage.from(window.HeonProtected.bucket)
+          .upload(safeName,file,{contentType:file.type,upsert:false,cacheControl:'3600'});
+        if(error)throw Error('강의안 업로드 실패: '+error.message);
+        if(kind==='manual')item.image=safeName;
+        else if(d.existingKey==='archiveLectureImages')item.src=safeName;
+        else item.image=safeName;
+        supplementalFiles.delete(key);
+      }
+      // Allow saving an empty manual box for future attachments. Keep baseline evidence untouched.
+      const payload={choiceExplanations:reasons,[d.existingKey]:copyJson(d.existing),manualEvidence:copyJson(d.manual)};
+      contentSaving=false;
+      if(await saveQuestionPatch(q,payload)){
+        closeExplanationEditor();render();toast('강의안·선택지별 해설 변경사항을 게시했습니다.');
+      }
+    }catch(error){toast(String(error.message||error).slice(0,160));}
+    finally{contentSaving=false;}
   }
 
   // Master explanation editor v1.3.7. Supabase stores only edited explanation
@@ -135,6 +359,7 @@
         <button class="button secondary small" data-action="master-explanation-history" ${explanationSaving?'disabled':''}>수정 기록</button>
       </div>
       ${explanationHistoryOpen?`<div style="margin-top:12px"><strong>수정 기록 · 이전 버전 복원</strong>${entries||'<p class="fine">아직 기록이 없습니다.</p>'}</div>`:''}
+      ${supplementalDraft?.questionId===q.id?reasonEditorHTML(q)+evidenceEditorHTML(q):''}
     </section>`;
   }
   function installMasterExplanationEditor(q,card){
@@ -143,7 +368,7 @@
     if(!header)return;
     const button=document.createElement('button');
     button.type='button';button.className='button secondary small';
-    button.dataset.action='master-explanation-edit';button.textContent='✎ 해설 수정';
+    button.dataset.action='master-explanation-edit';button.textContent='✎ 해설 수정 · 강의안';
     button.setAttribute('aria-label',`${q.label} 해설 수정`);
     header.insertBefore(button,header.lastElementChild);
     const ui=masterEditorHTML(q);
@@ -153,7 +378,7 @@
     }
   }
   function closeExplanationEditor(){
-    explanationEditingId='';explanationDraft='';explanationHistoryOpen=false;explanationHistoryItems=[];explanationSaving=false;
+    explanationEditingId='';explanationDraft='';explanationHistoryOpen=false;explanationHistoryItems=[];explanationSaving=false; supplementalDraft=null;supplementalFiles.clear();
   }
   function currentEditingQuestion(){
     return currentQuestion()?.id===explanationEditingId?currentQuestion():null;
@@ -757,7 +982,7 @@
     if(!Array.isArray(data.questions))throw Error('교수님 JSON에 questions 배열이 없습니다.');
     const ids=new Set();
     for(const q of data.questions){if(ids.has(q.id))throw Error(`중복 문제 ID: ${q.id}`);ids.add(q.id);}
-    for(const q of data.questions)updateQuestionExplanation(q);
+    for(const q of data.questions){updateQuestionExplanation(q);applyQuestionContent(q);}
     data.questions.sort((a,b)=>(yearSortValue(a.year)-yearSortValue(b.year))||(a.number-b.number)||a.id.localeCompare(b.id));
     professorCache.set(id,data);return data;
   }
@@ -993,6 +1218,8 @@
     const nextQuizId = quizQuestion?.id || null;
     if (nextQuizId && nextQuizId !== lastRenderedQuizId) {
       infoExpanded = restoringReview || submission(quizQuestion);
+      questionEditMenuId='';questionEditingId='';questionEditingMode='';
+      if(explanationEditingId && explanationEditingId!==nextQuizId)closeExplanationEditor();
     }
     lastRenderedQuizId = nextQuizId;
     // When a user changes a selection, keep the reading position in long questions.
@@ -1309,6 +1536,7 @@
       <div class="question-heading-line"><div class="question-heading-text"><div class="question-id">${studyMode==='year-exam'?esc(yearExamTeacherLabel(q.professor,q))+' 교수님 · ':''}QUESTION / ${esc(q.label)}</div><h2 class="question-num">${esc(q.label)} <span class="question-index">${curr+1} / ${scope.length}</span></h2></div>${matchMedia('(max-width:760px)').matches?'':(window.HeonInk?.controls(q.id)||'')}</div>
       <div class="question-info-line"><div class="question-meta"><span class="pill ${validationPillClass}">${verifiedDisplay}</span><span class="pill">${esc(yearName(q.year))}</span>${submission(q)?`<span class="pill blue">제출 완료</span>`:''}</div>
       <div class="question-head-actions"><button class="bookmark" data-action="bookmark" data-id="${esc(q.id)}" title="북마크" aria-pressed="${isBookmark(q)}">${isBookmark(q)?'★':'☆'}</button><button class="icon-btn report-question-btn" data-action="report-popup" data-question-id="${esc(q.id)}" title="문항 번호·설명·이미지를 첨부해 오류 제보" aria-label="${esc(q.label)}번 문제 오류 제보하기">✎ 제보하기</button><button class="icon-btn" data-action="toggle-evidence">${infoExpanded?'해설 접기':'해설 열기'}</button></div></div></div>
+      ${masterQuestionTools(q)}
       <div class="prompt">${esc(formatPrompt(q.prompt||'원본 이미지에서 문제 본문을 확인하세요.'))}</div>
       ${q.transcriptionStatus==='ocr_draft_needs_visual_review'?'<p class="review-note">⚠ 인쇄된 원문에서 자동으로 전사한 문항입니다. 글자 오인식 가능성이 있으므로 아래 ‘기출 원본 이미지 보기’에서 대조해 주세요.</p>':''}
       ${q.transcriptionStatus==='incomplete_visual_review_required'?'<p class="review-note">⚠ 지문·선지 전사가 완성되지 않은 문항입니다. 누락된 보기를 임의로 만들지 않았습니다.</p>':''}
@@ -1348,14 +1576,16 @@
     const refs=meta.lectureReferences||[];
     const lectures=meta.lectureImages||[];
     const evidences=lectures.map((fig,i)=>`<article class="evidence-item archive-lecture-item">
-      <img class="evidence-image" src="${esc(fig.src)}" alt="${esc(fig.alt||'PDF 원본 강의안 부분 발췌')}" loading="lazy" data-action="zoom" data-caption="홍기연 ${esc(meta.displayLabel||yearName(q.year))} · PDF ${meta.pdfPage}페이지 · 강의안 근거 ${i+1}"/>
+      ${fig.file||fig.page?`<div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">${esc(fig.page?'PDF '+fig.page+'쪽':'페이지 미입력')}</span><span class="file-name">${esc(fig.file||'관리자 변경 강의안')}</span></div></div>`:''}
+      <img class="evidence-image" src="${esc(fig.src||fig.image||'')}" alt="${esc(fig.alt||'PDF 원본 강의안 부분 발췌')}" loading="lazy" data-action="zoom" data-caption="${esc(fig.file||'홍기연 강의안')} · ${esc(fig.page?'PDF '+fig.page+'쪽':meta.displayLabel||yearName(q.year))} · 근거 ${i+1}"/>
       <div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`).join('');
     return `<aside class="evidence-panel pdf-archive-evidence"><div class="evidence-head"><div><div class="evidence-kicker">USER-PROVIDED PDF · v1.3</div><h3>원문 정답 및 해설</h3></div><button class="icon-btn" data-action="toggle-evidence" title="해설 접기">✕</button></div>
       <div class="question-meta" style="margin-top:12px"><span class="pill ${pending?'warn':'blue'}">${pending?'⚠ PDF 원문에서 판정 보류':'● 제공 PDF에 수록된 답안'}</span><span class="pill">${esc(meta.displayLabel||yearName(q.year))} · 홍기연</span></div>
       <div class="result-box ${pending?'pending':'correct'}"><b>PDF 원문 답안 · ${esc(meta.answerText||'판정 불가')}</b>${pending?'<p>PDF에 명시된 판정 유보 상태를 그대로 유지합니다.</p>':''}</div>
       ${q.explanation?`<p class="evidence-explanation">${esc(q.explanation)}</p>`:''}
       ${lectures.length?`<section class="archive-lecture-section"><h4>정답의 강의안 근거</h4>${evidences}${refs.map(v=>`<p class="file-name">${esc(v)}</p>`).join('')}</section>`:''}
-      ${meta.correctionText?`<section class="choice-reason-list archive-choice-list"><h4>나머지 보기 · PDF 원문 정정</h4><p>${esc(meta.correctionText)}</p></section>`:choices?`<section class="choice-reason-list archive-choice-list"><h4>나머지 보기 · PDF 원문 정정</h4>${choices}</section>`:''}
+      ${meta.correctionText?`<section class="choice-reason-list archive-choice-list"><h4>나머지 보기 · PDF 원문 정정</h4><p>${esc(meta.correctionText)}</p></section>`:choiceReasonList(q)}
+      ${manualEvidenceHTML(q)}
       ${(meta.warnings||[]).map(w=>`<p class="review-note">${esc(w)}</p>`).join('')}
       ${meta.pdfFile?`<p class="help-text"><a href="${esc(meta.pdfFile)}" target="_blank" rel="noopener">전체 원본 PDF 열기 ↗</a></p>`:''}
     </aside>`;
@@ -1394,6 +1624,7 @@
       ${(q.annualSources||[]).map(a=>`<details class="source-card"><summary>${esc(a.file.includes('수정사항')?'교수님 수정사항':'해당 연도 해설·복원자료')} · PDF ${esc(a.page)}쪽</summary><p class="file-name">${esc(a.file)}</p><p class="fine">당시 해설 원문입니다. 오류·정정 내용은 위 재검토 해설을 함께 확인하세요.</p><img class="source-image" src="${esc(a.image)}" alt="${esc(a.file)} PDF ${esc(a.page)}쪽" loading="lazy" data-action="zoom" data-caption="${esc(a.file)} · PDF ${esc(a.page)}쪽"></details>`).join('')}
       <div class="section-head"><h4 class="section-title" style="font-size:14px">${matched?'확인한 강의안 원본':'검토한 강의안 원본'}</h4><span class="fine">${refs.length}페이지</span></div>
       ${refs.map(e=>`<article class="evidence-item"><div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">${esc(lecturePageLabel(e))}${e.lectureYear?' · '+esc(e.lectureYear)+'년':''}</span><span class="file-name">${esc(e.file)}</span></div></div><img class="evidence-image" src="${esc(e.image)}" alt="${esc(e.lectureTitle)} · ${esc(lecturePageLabel(e))}" loading="lazy" data-action="zoom" data-caption="${esc(e.file)} · ${esc(lecturePageLabel(e))}"><div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`).join('')||'<div class="empty" style="padding:21px">첨부된 같은 교수님 자료에서 직접 근거를 확보하지 못했습니다.</div>'}
+      ${manualEvidenceHTML(q)}
       ${q.answerKey?.image?`<details class="source-card exam-answer-key"><summary>기출 공식 정답표 원본 · 강의안 검토와 구분</summary><img class="source-image" src="${esc(q.answerKey.image)}" alt="기출 공식 정답표" loading="lazy" data-action="zoom" data-caption="기출 공식 정답표"></details>`:''}
       ${q.answerConfirmation?.status!=='confirmed'&&!q.answerKey&&!audit.gradingHold&&!audit.answerRevised&&!matched?`<section class="user-answer"><h4>직접 정답 지정</h4><p>개인 지정 답안은 강의안 검증 결과와 별개입니다.${q.type==='short'?' 주관식은 지정해도 수동채점을 유지합니다.':''}</p>${q.type==='short'?`<input class="search" id="custom-short" type="text" placeholder="참고답안 입력" value="${esc(custom?String(answer):'')}" style="width:100%;margin-bottom:8px"><button class="button small secondary" data-action="save-custom-short">정답 저장</button>`:`<div class="custom-answers">${(q.choices||[]).map(c=>`<button class="number-pill ${(Array.isArray(answer)?answer:[answer]).includes(c.number)?'active':''}" data-action="custom-answer" data-number="${c.number}">${circles[c.number-1]||c.number}</button>`).join('')}</div><label class="fine"><input type="checkbox" data-action="custom-multi" ${state.customMulti[q.id]?'checked':''}> 복수 정답 지정</label>`}${custom?'<button class="button ghost tiny" data-action="remove-custom">내 지정 정답 해제</button>':''}</section>`:''}
       <details class="question-audit-history"><summary>재검토 기록 · ${esc(audit.version)}</summary><p>1차: 같은 교수님·단원·연도·근거 위치 대조. 2차: 선택지와 정답·전사 및 근거의 충분성 재검토.</p><p>동일 AI가 두 차례 검토했습니다. 부분 근거나 충돌이 남은 문항은 검증 완료로 표시하지 않습니다.</p></details>
@@ -1419,6 +1650,7 @@
       ${officialKey&&q.answerKey?.image?`<details class="source-card exam-answer-key"><summary>22학번 공식 정답표 원본 · PDF 마지막 7페이지 (클릭하여 보기)</summary><p class="source-warning">왼쪽 1~5번·오른쪽 6~10번을 묶어 읽는 표입니다. 8번은 ①·②·④ 복수 정답입니다. 강의안 근거 이미지와는 별개입니다.</p><img class="source-image" src="${esc(q.answerKey.image)}" alt="22학번 시험지 7쪽 공식 정답표" loading="lazy" data-action="zoom" data-caption="22학번 시험지 PDF 7쪽 · 객관식 1~68번 공식 정답표"></details>`:''}
       <div class="section-head"><h4 class="section-title" style="font-size:14px">${confirmed?'채택된 강의안 원본':userConfirmed&&userEvidence?'해설 참고 강의안':'검토용 강의안 원본'}</h4><span class="fine">${refs.length}페이지</span></div>
       ${refs.length?refs.map(e=>`<article class="evidence-item"><div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">PDF ${e.page}페이지${e.lectureYear?' · '+esc(e.lectureYear)+'년':''}</span><span class="file-name">${esc(e.file)}</span></div>${confirmed&&e.quote?`<div class="quote">원문 확인 기준: ${esc(e.quote)}</div>`:''}</div><img class="evidence-image" src="${esc(e.image)}" alt="${esc(e.file)} ${e.page}페이지 ${confirmed?'검증 근거':'검토용 자료'}" loading="lazy" data-action="zoom" data-caption="${esc(e.file)} · PDF ${e.page}페이지"><div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`).join(''):'<div class="empty" style="padding:21px">일치하는 강의안 페이지를 확보하지 못했습니다. 관련 없는 이미지로 근거를 대체하지 않았습니다.</div>'}
+      ${manualEvidenceHTML(q)}
       ${!confirmed&&!officialKey?`<section class="user-answer"><h4>직접 정답 지정</h4><p>강의안을 확인한 후 정답을 직접 지정할 수 있습니다. 선택 즉시 자동 저장되며 제출한 답안의 채점 상태가 변경됩니다.</p>${q.type==='short'?`<input class="search" id="custom-short" type="text" placeholder="정답 문장을 입력하세요" value="${esc(usedCustom?String(ans):'')}" style="width:100%;margin-bottom:8px"><button class="button small secondary" data-action="save-custom-short">정답 저장</button>`:
       `<div class="custom-answers">${Array.from({length:Math.max(5,q.choices?.length||5)},(_,i)=>{const a=i+1;const sel=ans!=null&&(Array.isArray(ans)?ans.includes(a):ans===a);return `<button class="number-pill ${sel?'active':''}" data-action="custom-answer" data-number="${a}" aria-pressed="${sel}">${circles[i]||i+1}</button>`}).join('')}</div><div class="row" style="margin-top:12px"><label class="fine"><input type="checkbox" data-action="custom-multi" ${state.customMulti[q.id]?'checked':''}> 복수 정답 지정</label></div>`}
       ${usedCustom?`<button class="button ghost tiny" data-action="remove-custom" style="margin-top:11px">내 지정 정답 해제</button>`:''}</section>`:''}
@@ -1432,14 +1664,15 @@
     const symbol={correct:'정답',wrong:'오답',pending:'채점 보류','not-started':'미제출'}[status];
     const answerText=q.archivePdf?.gradingHold?(q.archivePdf.answerText||'검토 필요'):answerArr.length?answerArr.map(n=>q.type==='short'?String(n):(circles[n-1]||n)).join(' · '):'미확정';
     const imgs=(q.figureImages||[]).filter(x=>x.src||x.image);
-    const refs=q.lectureAudit||q.validation?.stage==='accepted'||(q.validation?.supplemental2026?.status==='match')?q.evidence||[]:q.candidateEvidence||[];
+    const baseRefs=q.lectureAudit||q.validation?.stage==='accepted'||(q.validation?.supplemental2026?.status==='match')?q.evidence||[]:q.candidateEvidence||[];
+    const refs=[...baseRefs,...(q.manualEvidence||[]).filter(item=>item.image||item.src)];
     return `<article class="review-detail" aria-live="polite"><div class="review-detail-head"><div><small>${esc(yearExamTeacherLabel(q.professor,q))} 교수님 · ${esc(q.label)}</small><h2>${studyMode==='year-exam'?(q.type==='short'?esc('주'+q.label.split('주').pop()):esc(String(q.number))):esc(q.label)}번 문제 <span class="review-status-badge ${status}">${symbol}</span></h2></div><button class="button secondary small" data-action="report-popup" data-question-id="${esc(q.id)}" title="문항 번호·설명·이미지를 첨부할 수 있어요">✎ 오류 제보하기</button><button class="button secondary small" data-action="review-question" data-id="${esc(q.id)}">문제풀이로 ↗</button></div>
       <div class="review-detail-prompt">${esc(formatPrompt(q.prompt))}</div>
       ${imgs.map(f=>`<img class="review-detail-figure" src="${esc(f.src||f.image)}" alt="${esc(f.alt||'문제 원본')}" loading="lazy" data-action="zoom" data-caption="${esc(f.caption||q.label+' 문제 원본')}"/>`).join('')}
       ${q.type==='short'?`<div class="review-readonly-choice"><b>내 답안</b> ${esc(chosen.join('')||'미제출')}</div>`:`<div class="review-readonly-choices">${(q.sourceImageOnly?Array.from({length:Math.min(10,Math.max(1,q.imageChoiceCount||5))},(_,i)=>({number:i+1,text:'원문 이미지 참고'})):(q.choices||[])).map(ch=>`<div class="review-readonly-choice ${answerArr.includes(ch.number)?'correct':chosen.includes(ch.number)?'wrong':''}"><span>${circles[ch.number-1]||ch.number}</span>${esc(ch.text)} ${answerArr.includes(ch.number)?' ✓ 정답':''}${chosen.includes(ch.number)?' · 내 선택':''}</div>`).join('')}</div>`}
       <div class="review-key-line"><strong>정답: ${esc(answerText)}</strong> <span>내 답안: ${esc(chosen.length?chosen.map(n=>typeof n==='number'?(circles[n-1]||n):String(n)).join(', '):'미제출')}</span></div>
       </article><section class="review-detail-explanation" aria-label="선택한 문제의 해설 및 근거"><h3>해설 및 근거</h3>${q.explanationNotice?`<p class="review-note">${esc(q.explanationNotice)}</p>`:''}${q.lectureAudit?`<p class="review-note">${esc(lectureAuditLabel(q))}${q.lectureAudit.limitations?' · '+esc(q.lectureAudit.limitations):''}</p>`:''}<p>${esc(q.explanation||'등록된 해설이 없습니다. 관련 강의안과 기출 원본을 직접 대조해야 합니다.')}</p>${studyAiExplanation(q)?`<div class="ai-study-explanation"><b>✦ AI 학습 보충 (검증된 강의안과 구분)</b><p>${esc(studyAiExplanation(q))}</p></div>`:''}
-      ${refs.map(e=>`<div class="review-evidence-card"><small>${q.validation?.stage==='accepted'?'채택된 강의안 근거':'검토용 강의안 · 미채택'} · ${esc(e.file||'')} · ${esc(e.pageBasis?lecturePageLabel(e):'PDF '+e.page+'쪽')}</small><img src="${esc(e.image||'')}" alt="${esc(e.file||'강의안')} ${esc(e.page||'')}쪽" loading="lazy" data-action="zoom" data-caption="${esc(e.file||'')} · PDF ${esc(e.page)}쪽"/></div>`).join('')}
+      ${refs.map(e=>`<div class="review-evidence-card"><small>${q.validation?.stage==='accepted'?'채택된 강의안 근거':'검토용 강의안 · 미채택'} · ${esc(e.file||'')} · ${esc(e.pageBasis?lecturePageLabel(e):'PDF '+e.page+'쪽')}</small><img src="${esc(e.image||e.src||'')}" alt="${esc(e.file||'강의안')} ${esc(e.page||'')}쪽" loading="lazy" data-action="zoom" data-caption="${esc(e.file||'')} · PDF ${esc(e.page)}쪽"/></div>`).join('')}
       ${choiceReasonList(q)}${renderExplanationImages(q)}${questionAuditHTML(q)}${q.answerKey?.image?`<details class="source-card exam-answer-key"><summary>시험지 마지막 PDF 7페이지 정답표 (원본 보기)</summary><img class="source-image" src="${esc(q.answerKey.image)}" alt="공식 정답표" loading="lazy" data-action="zoom" data-caption="22학번 기출 공식 정답표 · 7페이지"/></details>`:''}
       ${q.subject==='growth-aging'&&q.source?.name?`<p class="fine">기출 · ${esc(q.source.name)} · PDF ${esc(q.source.page)}쪽</p>`:''}${q.source?.image?`<details class="source-card"><summary>기출 원본 확인</summary><img class="source-image" src="${esc(q.source.image)}" alt="기출 원본" loading="lazy" data-action="zoom" data-caption="${esc(q.label)} 원본"/></details>`:''}</section>`;
   }
@@ -1584,8 +1817,8 @@
           explanationImages:(q.archivePdf?.lectureImages||q.explanationImages||[]).filter(x=>x.src||x.image).map(x=>({
             src:x.src||x.image,label:x.caption||'사용자 제공 해설 참고 이미지'
           })),
-          evidence:evidence.map(lecture=>({
-            label:`${lecture.file||'강의안'} · ${lecturePageLabel(lecture)}${lecture.lectureYear?' · '+lecture.lectureYear+'년':''}`,src:lecture.image||lecture.src||''
+          evidence:[...evidence,...(q.manualEvidence||[]).filter(item=>item.image||item.src)].map(lecture=>({
+            label:`${lecture.file||'강의안'} · ${lecture.page?'PDF '+lecture.page+'쪽':'페이지 미입력'}${lecture.lectureYear?' · '+lecture.lectureYear+'년':''}`,src:lecture.image||lecture.src||''
           }))
         };
       }));
@@ -1634,10 +1867,56 @@
     if(btn.matches('input[type=checkbox]'))return; // change listener handles checkbox
     const action=btn.dataset.action;
     switch(action) {
+      case 'master-question-menu':{
+        const q=currentQuestion();if(!q||!masterCanEditExplanation())break;
+        questionEditMenuId=questionEditMenuId===q.id?'':q.id;render();break;
+      }
+      case 'master-question-start':{
+        const q=currentQuestion();if(!q||!masterCanEditExplanation())break;
+        questionEditingId=q.id;questionEditingMode=btn.dataset.mode;
+        questionDraftPrompt=String(q.prompt||'');questionDraftChoices=Object.fromEntries((q.choices||[]).map(ch=>[String(ch.number),ch.text]));
+        render();root.querySelector('#master-question-prompt,[data-choice-editor]')?.focus();break;
+      }
+      case 'master-question-cancel':questionEditingId='';questionEditingMode='';render();break;
+      case 'master-question-save':await saveMasterQuestion();break;
+      case 'master-evidence-quick-add':{
+        const q=currentQuestion();if(!q||!masterCanEditExplanation())break;
+        if(explanationEditingId!==q.id){explanationEditingId=q.id;explanationDraft=String(q.explanation||'');beginSupplementalEditor(q);}
+        else syncSupplementalFields();
+        if(supplementalDraft.manual.length<4)supplementalDraft.manual.push({image:'',file:'',page:''});
+        render();break;
+      }
+      case 'master-evidence-add':{
+        if(!masterCanEditExplanation()||!supplementalDraft)break;
+        syncSupplementalFields();
+        if(supplementalDraft.manual.length<4)supplementalDraft.manual.push({image:'',file:'',page:''});
+        else{toast('새 강의안 박스는 최대 4개입니다.');break;}
+        render();break;
+      }
+      case 'master-evidence-remove':{
+        if(!masterCanEditExplanation()||!supplementalDraft)break;
+        syncSupplementalFields();
+        const kind=btn.dataset.kind,index=Number(btn.dataset.index);
+        const arr=kind==='manual'?supplementalDraft.manual:supplementalDraft.existing;
+        if(!arr?.[index])break;
+        if(!confirm('이 강의안 첨부 박스를 제거할까요? 저장 전에는 실제 자료가 변경되지 않습니다.'))break;
+        arr.splice(index,1);supplementalFiles.clear();render();break;
+      }
+      case 'master-reason-add':{
+        if(!masterCanEditExplanation()||!supplementalDraft)break;
+        syncSupplementalFields();const n=String(root.querySelector('#master-next-reason')?.value||'');
+        if(!/^(10|[1-9])$/.test(n)||Object.prototype.hasOwnProperty.call(supplementalDraft.reasons,n))break;
+        supplementalDraft.reasons[n]='';render();break;
+      }
+      case 'master-reason-remove':{
+        if(!masterCanEditExplanation()||!supplementalDraft)break;
+        syncSupplementalFields();delete supplementalDraft.reasons[String(btn.dataset.number)];render();break;
+      }
+      case 'master-supplemental-save':await saveSupplementalContent();break;
       case 'master-explanation-edit':{
         const q=currentQuestion();if(!q||!masterCanEditExplanation())break;
         explanationEditingId=q.id;explanationDraft=String(q.explanation||'');
-        explanationHistoryOpen=false;explanationHistoryItems=[];render();
+        explanationHistoryOpen=false;explanationHistoryItems=[];beginSupplementalEditor(q);render();
         root.querySelector('#master-explanation-text')?.focus();break;
       }
       case 'master-explanation-cancel':if(masterCanEditExplanation()){closeExplanationEditor();render();}break;
@@ -1757,6 +2036,17 @@
   });
   root.addEventListener('change',(e)=>{
     const el=e.target;
+    if(el.dataset.uploadKey){
+      if(!masterCanEditExplanation()||!supplementalDraft)return;
+      const file=el.files?.[0];if(!file)return;
+      if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>10*1024*1024||!file.size){
+        toast('PNG/JPG/WEBP 이미지(10MB 이하)를 선택해주세요.');el.value='';return;
+      }
+      supplementalFiles.set(el.dataset.uploadKey,file);
+      const label=root.querySelector(`[data-upload-status="${el.dataset.uploadKey}"]`);
+      if(label)label.textContent=`새 이미지: ${file.name} (${(file.size/1024/1024).toFixed(2)} MB) · 저장 시 업로드`;
+      return;
+    }
     if(el.id==='global-search-subject'){
       searchSubjectOverride=el.value==='current'?null:el.value;
       searchOpen=!!searchText.trim();
@@ -1773,6 +2063,14 @@
   root.addEventListener('input', e=>{
     const el=e.target;
     if(el.id==='master-explanation-text'){explanationDraft=el.value;return;}
+    if(el.id==='master-question-prompt'){questionDraftPrompt=el.value;return;}
+    if(el.dataset.choiceEditor){questionDraftChoices[el.dataset.choiceEditor]=el.value;return;}
+    if(el.dataset.masterReason&&supplementalDraft){supplementalDraft.reasons[el.dataset.masterReason]=el.value;return;}
+    if(el.dataset.evidenceField&&supplementalDraft){
+      const arr=el.dataset.evidenceKind==='manual'?supplementalDraft.manual:supplementalDraft.existing;
+      if(arr?.[Number(el.dataset.index)])arr[Number(el.dataset.index)][el.dataset.evidenceField]=el.value;
+      return;
+    }
     if(el.id==='global-search-input'){
       searchText=el.value;searchOpen=true;updateSearchSuggestions();loadSearchIndex();return;
     }
@@ -1830,13 +2128,59 @@
   });
   root.addEventListener('pointerup',()=>{if(moving){moving=false;saveState();}});
   root.addEventListener('pointercancel',()=>{moving=false;});
-  function openModal(src,caption) {
+  async function openModal(src,caption) {
+    if(!src)return;
     document.querySelector('.image-modal')?.remove();
-    const modal=document.createElement('div');modal.className='image-modal';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
-    const close=document.createElement('button');close.type='button';close.textContent='닫기 ✕';close.addEventListener('click',()=>modal.remove());
-    const image=document.createElement('img');image.src=src;image.alt=caption;
-    const captionEl=document.createElement('div');captionEl.className='image-caption';captionEl.textContent=caption;
-    modal.append(close,image,captionEl);modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});document.body.append(modal);close.focus();
+    const modal=document.createElement('div');modal.className='image-modal';
+    modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
+    modal.setAttribute('aria-label','강의안 이미지 확대 보기');
+    const toolbar=document.createElement('div');toolbar.className='image-zoom-toolbar';
+    const minus=document.createElement('button');minus.type='button';minus.textContent='⌕ −';minus.title='축소';minus.setAttribute('aria-label','이미지 축소');
+    const plus=document.createElement('button');plus.type='button';plus.textContent='⌕ +';plus.title='확대';plus.setAttribute('aria-label','이미지 확대');
+    const scaleLabel=document.createElement('span');scaleLabel.className='zoom-percent';scaleLabel.setAttribute('aria-live','polite');
+    const reset=document.createElement('button');reset.type='button';reset.textContent='맞춤';reset.title='화면에 맞게';
+    const close=document.createElement('button');close.type='button';close.textContent='닫기 ✕';close.className='image-zoom-close';
+    toolbar.append(minus,scaleLabel,plus,reset,close);
+    const viewport=document.createElement('div');viewport.className='image-zoom-viewport';
+    const surface=document.createElement('div');surface.className='image-zoom-surface';
+    const img=document.createElement('img');img.alt=caption||'확대 이미지';
+    surface.appendChild(img);viewport.appendChild(surface);
+    const captionEl=document.createElement('div');captionEl.className='image-caption';captionEl.textContent=caption||'';
+    modal.append(toolbar,viewport,captionEl);
+    const stop=()=>modal.remove();close.addEventListener('click',stop);
+    modal.addEventListener('click',e=>{if(e.target===modal)stop();});
+    let zoom=1,fitWidth=0,fitHeight=0;
+    function resize(){
+      if(!img.naturalWidth||!img.naturalHeight)return;
+      const width=Math.max(100,viewport.clientWidth-16),height=Math.max(100,viewport.clientHeight-16);
+      const ratio=Math.min(1,width/img.naturalWidth,height/img.naturalHeight);
+      fitWidth=Math.max(1,img.naturalWidth*ratio);fitHeight=Math.max(1,img.naturalHeight*ratio);
+      draw();
+    }
+    function draw(){
+      img.style.width=`${Math.round(fitWidth*zoom)}px`;
+      img.style.height=`${Math.round(fitHeight*zoom)}px`;
+      scaleLabel.textContent=`${Math.round(zoom*100)}%`;
+      minus.disabled=zoom<=1;plus.disabled=zoom>=10;
+    }
+    function changeZoom(value){
+      const prev=zoom;zoom=Math.max(1,Math.min(10,Math.round(value*100)/100));
+      if(zoom===prev)return;
+      const x=viewport.scrollLeft+viewport.clientWidth/2,y=viewport.scrollTop+viewport.clientHeight/2;
+      draw();viewport.scrollLeft=x*(zoom/prev)-viewport.clientWidth/2;
+      viewport.scrollTop=y*(zoom/prev)-viewport.clientHeight/2;
+    }
+    minus.addEventListener('click',()=>changeZoom(zoom/1.5));
+    plus.addEventListener('click',()=>changeZoom(zoom*1.5));
+    reset.addEventListener('click',()=>{zoom=1;draw();viewport.scrollTo(0,0);});
+    viewport.addEventListener('wheel',e=>{if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();changeZoom(e.deltaY<0?zoom*1.2:zoom/1.2);},{passive:false});
+    img.addEventListener('load',resize,{once:true});
+    document.body.append(modal);close.focus();
+    try{
+      const valid=/^(assets\/(?!ui\/)|data\/)/.test(String(src).replace(/^\.\//,''));
+      img.src=valid ? await window.HeonProtected.getAssetURL(src) : src;
+      if(img.complete&&img.naturalWidth)resize();
+    }catch(error){captionEl.textContent='이미지를 불러오지 못했습니다: '+String(error.message||error);}
   }
   document.addEventListener('keydown',e=>{
     if(e.key==='Escape'){document.querySelector('.image-modal')?.remove();closeDialog();if(mobileMenuOpen){mobileMenuOpen=false;render();}}
@@ -1844,8 +2188,10 @@
   });
   window.addEventListener('storage',e=>{if(e.key===KEY&&e.newValue!==e.oldValue){readState();render();toast('다른 탭에서 변경된 학습 기록을 반영했습니다.');}});
   document.addEventListener('visibilitychange',()=>{
-    if(!document.hidden && Date.now()-explanationOverrideRefreshAt>180000 && window.HeonStudyAccount?.active)
-      loadSharedExplanationOverrides(true);
+    if(!document.hidden && window.HeonStudyAccount?.active){
+      if(Date.now()-explanationOverrideRefreshAt>180000)loadSharedExplanationOverrides(true);
+      if(Date.now()-questionContentRefreshAt>180000)loadSharedQuestionContent(true);
+    }
   });
   async function init() {
     readState();initializeLegacyReviewSchedule();theme();
@@ -1883,6 +2229,7 @@
         const isMaster=masterCanEditExplanation();
         if(isMaster!==masterExplanationRoleSeen){masterExplanationRoleSeen=isMaster;if(catalog)render();}
         if(uid && explanationOverridesOwner!==uid)loadSharedExplanationOverrides();
+        if(uid && questionContentOwner!==uid)loadSharedQuestionContent();
       }
       window.HeonStudyAccount?.init(
         ()=>state,

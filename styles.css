@@ -1413,3 +1413,43 @@ html[data-theme=light] .review-number-button.pending{background:#fff4d9;border-c
 .archive-number-options .option {min-height:44px;}
 
 .home-disclaimer{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}.site-version{margin-left:auto;flex-shrink:0;font-size:.75rem}
+
+/* ===== v1.4.1: keep all evidence images in natural reading order ===== */
+.quiz-mode .evidence-flow{display:block!important;column-count:1!important;columns:1!important;
+  column-width:auto!important;column-gap:0!important;min-width:0;width:100%;overflow-wrap:anywhere;}
+.quiz-mode .evidence-flow > *{max-width:100%;min-width:0;break-inside:auto!important;}
+.quiz-mode .evidence-flow .evidence-item{display:block;width:100%;max-width:100%;break-inside:avoid!important;}
+.quiz-mode .evidence-flow .evidence-image{display:block;max-width:100%;height:auto;margin:0 auto;object-fit:contain;}
+.quiz-mode .evidence-flow .section-head{max-width:100%;}
+.master-question-tools{margin:12px 0;max-width:100%;}
+.master-question-menu,.master-edit-actions,.master-add-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0;}
+.master-edit-form,.master-editor-section{border:1px solid var(--stroke2);background:var(--panel2);border-radius:12px;padding:14px;margin-top:12px;min-width:0;}
+.master-edit-form label,.master-evidence-edit label{display:block;margin:10px 0 5px;font-weight:750;font-size:12px;}
+.master-edit-form textarea,.master-editor-section textarea,.master-evidence-edit input[type=text]{width:100%;display:block;box-sizing:border-box;
+  background:var(--panel);color:var(--text);border:1px solid var(--stroke2);border-radius:9px;
+  padding:9px 11px;line-height:1.6;resize:vertical;font:inherit;font-size:13px;}
+.master-editor-section h4{margin:0 0 8px;font-size:14px;color:var(--accent);}
+.master-editor-section .fine{line-height:1.6;}
+.master-reason-row{padding:13px 0;border-bottom:1px solid var(--stroke);}
+.master-editor-row-head{display:flex;align-items:center;gap:8px;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;}
+.master-editor-row-head b{font-size:12px;}
+.master-add-row .select{min-width:110px;max-width:190px;}
+.master-evidence-edit{border:1px dashed var(--stroke2);padding:12px;border-radius:11px;margin:10px 0;min-width:0;}
+.master-evidence-edit input[type=file]{display:block;max-width:100%;width:100%;font-size:11px;margin:8px 0;color:var(--text);}
+.master-image-path{display:block;font-size:10px;color:var(--muted);overflow-wrap:anywhere;max-width:100%;}
+.master-upload-status{display:block;font-size:11px;color:var(--accent);overflow-wrap:anywhere;}
+.master-manual-evidence{margin:16px 0;min-width:0;}
+.master-manual-evidence .evidence-item{margin-top:10px;}
+.master-empty-lecture-box{border:1px dashed var(--stroke2);min-height:120px;border-radius:12px;
+  background:var(--panel2);color:var(--muted);display:grid;place-items:center;text-align:center;font-size:12px;padding:13px;margin:10px 0;}
+.image-modal{padding:10px;gap:9px;align-items:stretch;}
+.image-zoom-toolbar{display:flex;justify-content:center;align-items:center;flex-wrap:wrap;gap:9px;flex:0 0 auto;}
+.image-modal .image-zoom-toolbar button{position:static;right:auto;top:auto;background:#172237;
+  border:1px solid #35465e;border-radius:9px;padding:10px 15px;color:#fff;cursor:pointer;font-size:13px;}
+.image-modal .image-zoom-toolbar button:disabled{opacity:.4;cursor:not-allowed;}
+.image-zoom-toolbar .zoom-percent{color:white;font-size:13px;font-variant-numeric:tabular-nums;min-width:55px;text-align:center;}
+.image-zoom-viewport{width:100%;min-height:0;flex:1 1 auto;overflow:auto;overscroll-behavior:contain;border-radius:10px;}
+.image-zoom-surface{width:max-content;min-width:100%;height:max-content;min-height:100%;display:flex;align-items:center;justify-content:center;}
+.image-modal .image-zoom-viewport img{display:block;width:auto;height:auto;max-width:none;max-height:none;object-fit:contain;border-radius:4px;background:#fff;flex-shrink:0;}
+.image-modal .image-caption{margin:0 auto 2px;flex:0 0 auto;max-height:8vh;overflow:auto;}
+@media(max-width:760px){.image-modal{padding:7px;}.image-modal .image-zoom-toolbar button{padding:8px 11px;}}

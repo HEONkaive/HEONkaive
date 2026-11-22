@@ -248,8 +248,13 @@
       ${masterCanEditExplanation()&&(q.manualEvidence||[]).length<4?`<button class="button secondary small" data-action="master-evidence-quick-add">▧ 네모박스 생성하기 (${(q.manualEvidence||[]).length}/4)</button>`:''}
     </section>`;
   }
+  // A single save path for all fields in the explanation editor. Earlier builds
+  // saved only the general explanation when the upper Save button was clicked,
+  // silently leaving option-by-option notes unsaved. Both buttons now persist all
+  // edited fields; ordinary users have no access to this routine.
   async function saveSupplementalContent(){
-    const q=currentEditingQuestion();if(!q||!supplementalDraft||supplementalDraft.questionId!==q.id||contentSaving)return;
+    const q=currentEditingQuestion();
+    if(!q||!masterCanEditExplanation()||!supplementalDraft||supplementalDraft.questionId!==q.id||contentSaving||explanationSaving)return;
     syncSupplementalFields();
     const d=supplementalDraft;
     if(d.manual.length>4){toast('새 강의안 박스는 최대 4개입니다.');return;}
@@ -262,11 +267,16 @@
     for(const item of [...d.existing,...d.manual]){
       if(String(item.file||'').length>500||String(item.page??'').length>100){toast('강의안 제목이나 페이지 입력이 너무 깁니다.');return;}
     }
-    contentSaving=true;
-    // Upload each file to the *private* member-protected bucket before publishing its path.
-    const files=[...supplementalFiles.entries()];
+    const draft=String(explanationDraft||'').trim();
+    const oldBody=String(q.explanation||'').trim();
+    const bodyChanged=draft!==oldBody;
+    if(bodyChanged&&!draft){toast('기존 본문 해설을 비워둘 수 없습니다. 선택지별 해설만 추가하려면 본문을 그대로 두세요.');return;}
+    if(draft.length>30000){toast('해설은 30,000자 이하여야 합니다.');return;}
+    explanationSaving=true;
+    let contentPublished=false;
     try{
-      for(const [key,file] of files){
+      // Upload selected files to the original PRIVATE member-protected bucket.
+      for(const [key,file] of [...supplementalFiles.entries()]){
         if(!file)continue;
         if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>10*1024*1024||!file.size)
           throw Error('PNG/JPG/WEBP 이미지(10MB 이하)만 첨부할 수 있습니다.');
@@ -285,14 +295,28 @@
         else item.image=safeName;
         supplementalFiles.delete(key);
       }
-      // Allow saving an empty manual box for future attachments. Keep baseline evidence untouched.
-      const payload={choiceExplanations:reasons,[d.existingKey]:copyJson(d.existing),manualEvidence:copyJson(d.manual)};
-      contentSaving=false;
-      if(await saveQuestionPatch(q,payload)){
-        closeExplanationEditor();render();toast('강의안·선택지별 해설 변경사항을 게시했습니다.');
+      const changed={choiceExplanations:reasons,[d.existingKey]:copyJson(d.existing),manualEvidence:copyJson(d.manual)};
+      const editedContent=Object.entries(changed).some(([key,value])=>
+        JSON.stringify(value)!==JSON.stringify(key==='archiveLectureImages'?(q.archivePdf?.lectureImages||[]):(q[key]||((key==='choiceExplanations')?{}:[]))));
+      if(editedContent){
+        if(!await saveQuestionPatch(q,changed))return; // preserve editor after failed RPC
+        contentPublished=true;
       }
-    }catch(error){toast(String(error.message||error).slice(0,160));}
-    finally{contentSaving=false;}
+      if(bodyChanged){
+        const revision=explanationOverrides.get(q.id)?.revision||0;
+        const {data,error}=await sharedLeaderboardClient().rpc('heon_editor_save_explanation',{
+          p_question_id:q.id,p_body:draft,p_original_body:q.__heonBaseExplanation||'',p_expected_revision:revision
+        });
+        if(error)throw error;
+        const saved=Array.isArray(data)?data[0]:data;
+        explanationOverrides.set(q.id,{body:String(saved?.body||draft),revision:Number(saved?.revision||revision+1),updatedAt:saved?.updated_at});
+        applyAllExplanationOverrides();
+      }
+      closeExplanationEditor();render();
+      toast(editedContent||bodyChanged?'본문·선택지별 해설·강의안 변경사항이 저장되었습니다.':'수정된 내용이 없습니다.');
+    }catch(error){
+      toast((contentPublished?'선택지별 해설·강의안은 저장됐지만 본문 해설 저장 실패: ':'저장 실패: ')+String(error.message||error).slice(0,150));
+    }finally{explanationSaving=false;}
   }
 
   // Master explanation editor v1.3.7. Supabase stores only edited explanation
@@ -361,7 +385,7 @@
       <textarea id="master-explanation-text" spellcheck="false" rows="9" maxlength="30000" style="width:100%;box-sizing:border-box;border-radius:10px;border:1px solid #aebed1;padding:12px;background:var(--card,#fff);color:var(--text,#182333);font:inherit;line-height:1.65;resize:vertical" ${explanationSaving?'disabled':''}>${esc(explanationDraft)}</textarea>
       <p class="fine" style="margin:8px 0">줄바꿈을 직접 수정할 수 있습니다. 원래 해설과 수정 이력은 보존됩니다.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="button small" data-action="master-explanation-save" ${explanationSaving?'disabled':''}>${explanationSaving?'저장 중…':'저장'}</button>
+        <button class="button small" data-action="master-explanation-save" ${explanationSaving?'disabled':''}>${explanationSaving?'저장 중…':'모든 변경사항 저장'}</button>
         <button class="button secondary small" data-action="master-explanation-cancel" ${explanationSaving?'disabled':''}>취소</button>
         <button class="button secondary small" data-action="master-explanation-history" ${explanationSaving?'disabled':''}>수정 기록</button>
       </div>
@@ -391,25 +415,10 @@
     return currentQuestion()?.id===explanationEditingId?currentQuestion():null;
   }
   async function saveMasterExplanation(){
-    const q=currentEditingQuestion();if(!q||!masterCanEditExplanation()||explanationSaving)return;
-    const draft=String(root.querySelector('#master-explanation-text')?.value||'').trim();
-    if(!draft){toast('해설을 비워둘 수 없습니다.');return;}
-    if(draft.length>30000){toast('해설은 30,000자 이하여야 합니다.');return;}
-    explanationSaving=true;explanationDraft=draft;
-    const revision=explanationOverrides.get(q.id)?.revision||0;
-    const client=sharedLeaderboardClient();
-    try{
-      const {data,error}=await client.rpc('heon_editor_save_explanation',{
-        p_question_id:q.id,p_body:draft,p_original_body:q.__heonBaseExplanation||'',p_expected_revision:revision
-      });
-      if(error)throw error;
-      const saved=Array.isArray(data)?data[0]:data;
-      explanationOverrides.set(q.id,{body:String(saved?.body||draft),revision:Number(saved?.revision||revision+1),updatedAt:saved?.updated_at});
-      applyAllExplanationOverrides();closeExplanationEditor();render();toast('해설 수정이 Supabase에 저장되었습니다.');
-    }catch(error){
-      toast(/REVISION_CONFLICT/.test(String(error.message))?'다른 수정본이 저장됐습니다. 새로고침 후 다시 수정해주세요.':'해설 저장 실패: '+String(error.message||error).slice(0,130));
-    }finally{explanationSaving=false;}
+    // Same action as the buttons in the option/explanation/evidence sub-editors.
+    await saveSupplementalContent();
   }
+
   async function showMasterExplanationHistory(){
     const q=currentEditingQuestion();if(!q||!masterCanEditExplanation()||explanationSaving)return;
     explanationDraft=String(root.querySelector('#master-explanation-text')?.value??explanationDraft);
@@ -1691,7 +1700,8 @@
       <div class="result-box ${pending?'pending':'correct'}"><b>PDF 원문 답안 · ${esc(meta.answerText||'판정 불가')}</b>${pending?'<p>PDF에 명시된 판정 유보 상태를 그대로 유지합니다.</p>':''}</div>
       ${q.explanation?`<p class="evidence-explanation">${esc(q.explanation)}</p>`:''}
       ${lectures.length?`<section class="archive-lecture-section"><h4>정답의 강의안 근거</h4>${evidences}${refs.map(v=>`<p class="file-name">${esc(v)}</p>`).join('')}</section>`:''}
-      ${meta.correctionText?`<section class="choice-reason-list archive-choice-list"><h4>나머지 보기 · PDF 원문 정정</h4><p>${esc(meta.correctionText)}</p></section>`:choiceReasonList(q)}
+      ${meta.correctionText?`<section class="choice-reason-list archive-choice-list"><h4>나머지 보기 · PDF 원문 정정</h4><p>${esc(meta.correctionText)}</p></section>`:''}
+      ${choiceReasonList(q)}
       ${manualEvidenceHTML(q)}
       ${(meta.warnings||[]).map(w=>`<p class="review-note">${esc(w)}</p>`).join('')}
       ${meta.pdfFile?`<p class="help-text"><a href="${esc(meta.pdfFile)}" target="_blank" rel="noopener">전체 원본 PDF 열기 ↗</a></p>`:''}

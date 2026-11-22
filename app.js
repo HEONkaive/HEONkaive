@@ -74,15 +74,19 @@
   let questionContentOwner='',questionContentLoading=false,questionContentRefreshAt=0;
   let questionEditMenuId='',questionEditingId='',questionEditingMode='';
   let questionDraftPrompt='',questionDraftChoices={},questionDraftChoiceOrder=[];
+  let questionDraftFigures=[];
+  const questionFigureFiles=new Map();
+  let questionFigureSaving=false;
   let contentSaving=false, supplementalDraft=null;
   const supplementalFiles=new Map();
-  const CONTENT_KEYS=['prompt','choices','choiceExplanations','evidence','candidateEvidence','archiveLectureImages','archiveCorrectionText','manualEvidence'];
+  const CONTENT_KEYS=['prompt','choices','choiceExplanations','evidence','candidateEvidence','archiveLectureImages','archiveCorrectionText','manualEvidence','figureImages'];
   const copyJson=value=>JSON.parse(JSON.stringify(value));
   function questionBaseContent(q){
     if(!Object.prototype.hasOwnProperty.call(q,'__heonBaseContent')){
       const original={prompt:q.prompt||'',choices:q.choices||[],choiceExplanations:q.choiceExplanations||{},
         evidence:q.evidence||[],candidateEvidence:q.candidateEvidence||[],
-        archiveLectureImages:q.archivePdf?.lectureImages||[],archiveCorrectionText:q.archivePdf?.correctionText??'',manualEvidence:[]};
+        archiveLectureImages:q.archivePdf?.lectureImages||[],archiveCorrectionText:q.archivePdf?.correctionText??'',manualEvidence:[],
+        figureImages:Array.isArray(q.figureImages)?q.figureImages:(q.figureImage?[{src:q.figureImage,alt:q.figureAlt||'',caption:q.figureCaption||''}]:[])};
       Object.defineProperty(q,'__heonBaseContent',{value:copyJson(original),enumerable:false,configurable:false});
     }
     return q.__heonBaseContent;
@@ -149,13 +153,45 @@
     if(!masterCanEditExplanation())return '';
     return `<button class="icon-btn master-question-trigger" data-action="master-question-menu" aria-expanded="${questionEditMenuId===q.id?'true':'false'}" title="관리자 전용 문항 수정">✎ 문항 수정</button>`;
   }
+  function syncQuestionFigureFields(){
+    if(questionEditingMode!=='prompt')return;
+    const prompt=root.querySelector('#master-question-prompt');
+    if(prompt)questionDraftPrompt=prompt.value;
+    root.querySelectorAll('[data-question-figure-caption]').forEach(el=>{
+      const n=Number(el.dataset.questionFigureCaption);
+      if(Number.isInteger(n)&&questionDraftFigures[n])questionDraftFigures[n].caption=el.value;
+    });
+  }
+  function clearQuestionFigureDraft(){
+    questionDraftFigures=[];questionFigureFiles.clear();questionFigureSaving=false;
+  }
+  function masterQuestionFigureEditor(q){
+    const fresh=questionDraftFigures.filter(f=>!(f.src||f.image)).length;
+    const html=questionDraftFigures.map((f,i)=>{
+      const previous=String(f.src||f.image||'');
+      const selected=questionFigureFiles.get(i);
+      return `<article class="master-question-figure-card">
+        <div class="master-editor-row-head"><b>${previous?'기존':'추가할'} Figure ${i+1}</b>${previous?'':`<button class="button ghost tiny" data-action="master-question-figure-remove" data-index="${i}" ${questionFigureSaving?'disabled':''}>추가 취소</button>`}</div>
+        ${previous?`<small class="master-image-path">${esc(previous)}</small><p class="fine">기존 Figure는 유지되며 새 이미지는 뒤에 추가됩니다.</p>`:
+          `<label for="master-question-figure-file-${i}">Figure 이미지 선택 (PNG / JPG / WEBP · 최대 10MB)</label>
+          <input id="master-question-figure-file-${i}" type="file" accept="image/png,image/jpeg,image/webp" data-question-figure-file="${i}" ${questionFigureSaving?'disabled':''}>
+          <span class="master-upload-status" data-question-figure-status="${i}">${selected?`선택됨: ${esc(selected.name)} (${(selected.size/1048576).toFixed(2)}MB) · 저장 시 업로드`:'이미지를 선택한 뒤 변경사항 저장을 눌러주세요.'}</span>
+          <label for="master-question-figure-caption-${i}">Figure 설명 (선택)</label>
+          <input id="master-question-figure-caption-${i}" data-question-figure-caption="${i}" type="text" maxlength="300" value="${esc(f.caption||'')}" placeholder="예: 자궁과 태아의 위치 그림">`}
+      </article>`;
+    }).join('');
+    return `<section class="master-question-figure-editor"><h4>문항 Figure 이미지 추가</h4>
+      <p class="fine">문제의 제시문 바로 아래에 그림이 나타납니다. 기존 Figure는 유지됩니다. 새 첨부는 최대 10개까지 추가할 수 있습니다.</p>
+      ${html}<button class="button secondary small" data-action="master-question-figure-add" ${fresh>=10||questionFigureSaving?'disabled':''}>＋ Figure 추가</button>
+      </section>`;
+  }
   function masterQuestionTools(q){
     if(!masterCanEditExplanation())return '';
     const menu=questionEditMenuId===q.id;
     const editing=questionEditingId===q.id;
     let form='';
     if(editing && questionEditingMode==='prompt'){
-      form=`<label for="master-question-prompt">제시문 수정</label><textarea id="master-question-prompt" rows="8" maxlength="30000" spellcheck="false">${esc(questionDraftPrompt)}</textarea>`;
+      form=`<label for="master-question-prompt">제시문 수정</label><textarea id="master-question-prompt" rows="8" maxlength="30000" spellcheck="false">${esc(questionDraftPrompt)}</textarea>${masterQuestionFigureEditor(q)}`;
     }else if(editing && questionEditingMode==='choices'){
       form=`<strong>선택지 수정</strong><p class="fine">기존 선택지 번호와 정답은 유지됩니다. 새 선택지는 최대 10번까지 추가할 수 있습니다.</p>${questionDraftChoiceOrder.map(number=>{
         const original=(q.choices||[]).find(ch=>Number(ch.number)===number);
@@ -166,16 +202,52 @@
     const canAddChoice=questionDraftChoiceOrder.length<10 && questionDraftChoiceOrder.some(n=>n>=1&&n<=10);
     return `<section class="master-question-tools">
       ${menu?`<div class="master-question-menu"><button class="button secondary small" data-action="master-question-start" data-mode="prompt">제시문 수정</button><button class="button secondary small" data-action="master-question-start" data-mode="choices" ${!q.choices?.length?'disabled':''}>선택지 수정</button></div>`:''}
-      ${form?`<div class="master-edit-form">${form}<div class="master-edit-actions"><button class="button small" data-action="master-question-save" ${contentSaving?'disabled':''}>변경사항 저장</button>${questionEditingMode==='choices'?`<button class="button secondary small" data-action="master-choice-add" ${canAddChoice&&!contentSaving?'':'disabled'}>＋ 선택지 추가</button>`:''}<button class="button secondary small" data-action="master-question-cancel">취소</button></div></div>`:''}
+      ${form?`<div class="master-edit-form">${form}<div class="master-edit-actions"><button class="button small" data-action="master-question-save" ${contentSaving||questionFigureSaving?'disabled':''}>변경사항 저장</button>${questionEditingMode==='choices'?`<button class="button secondary small" data-action="master-choice-add" ${canAddChoice&&!contentSaving?'':'disabled'}>＋ 선택지 추가</button>`:''}<button class="button secondary small" data-action="master-question-cancel">취소</button></div></div>`:''}
     </section>`;
   }
   async function saveMasterQuestion(){
-    const q=currentQuestion();if(!q||q.id!==questionEditingId||!masterCanEditExplanation())return;
+    const q=currentQuestion();
+    if(!q||q.id!==questionEditingId||!masterCanEditExplanation()||questionFigureSaving||contentSaving)return;
     let patch;
     if(questionEditingMode==='prompt'){
-      const value=String(root.querySelector('#master-question-prompt')?.value||'').trim();
+      syncQuestionFigureFields();
+      const value=String(questionDraftPrompt||'').trim();
       if(!value||value.length>30000){toast('제시문은 1~30,000자로 입력해주세요.');return;}
       patch={prompt:value};
+      const pending=questionDraftFigures.map((f,i)=>({f,i})).filter(({f})=>!(f.src||f.image));
+      if(pending.length>10){toast('새 Figure는 최대 10개까지 추가할 수 있습니다.');return;}
+      for(const {i,f} of pending){
+        const file=questionFigureFiles.get(i);
+        if(!file){toast(`${i+1}번째 Figure 이미지를 먼저 선택하거나 해당 박스를 취소해주세요.`);return;}
+        if(!['image/png','image/jpeg','image/webp'].includes(file.type)||!file.size||file.size>10485760){
+          toast('Figure는 10MB 이하 PNG, JPG 또는 WEBP 이미지만 첨부할 수 있습니다.');return;
+        }
+        if(String(f.caption||'').length>300){toast('Figure 설명은 300자 이하로 입력해주세요.');return;}
+      }
+      if(pending.length){
+        questionFigureSaving=true;
+        try{
+          const figures=copyJson(questionDraftFigures);
+          for(const {i} of pending){
+            // Upload to the existing PRIVATE evidence prefix; no new public assets.
+            const file=questionFigureFiles.get(i);
+            const safeId=Array.from(new TextEncoder().encode(q.id)).slice(0,130)
+              .map(x=>x.toString(16).padStart(2,'0')).join('');
+            const uuid=window.crypto?.randomUUID?.() || Array.from(window.crypto.getRandomValues(new Uint8Array(16)))
+              .map(x=>x.toString(16).padStart(2,'0')).join('');
+            const ext={'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}[file.type];
+            const path=`assets/evidence/manual/v1.4.1/${safeId}/figure-${uuid}.${ext}`;
+            const {error}=await window.HeonStudyAccount.client.storage.from(window.HeonProtected.bucket)
+              .upload(path,file,{contentType:file.type,upsert:false,cacheControl:'3600'});
+            if(error)throw Error(`Figure 업로드 실패: ${error.message}`);
+            figures[i]={src:path,alt:`${q.label}번 문제 Figure ${i+1}`,
+              caption:String(figures[i].caption||'').trim()||'문항 Figure'};
+          }
+          patch.figureImages=figures;
+        }catch(error){
+          toast(String(error.message||error).slice(0,180));return;
+        }finally{questionFigureSaving=false;}
+      }
     }else if(questionEditingMode==='choices'){
       const choices=questionDraftChoiceOrder.map(number=>{
         const original=(q.choices||[]).find(ch=>Number(ch.number)===number);
@@ -188,7 +260,8 @@
       patch={choices};
     }else return;
     if(await saveQuestionPatch(q,patch)){
-      questionEditingId='';questionEditingMode='';questionEditMenuId='';questionDraftChoiceOrder=[];questionDraftChoices={};render();toast('문항 수정 내용이 모든 회원에게 반영되었습니다.');
+      questionEditingId='';questionEditingMode='';questionEditMenuId='';questionDraftChoiceOrder=[];questionDraftChoices={};
+      clearQuestionFigureDraft();render();toast('문항 수정 내용이 모든 회원에게 반영되었습니다.');
     }
   }
   function getEditableEvidence(q){
@@ -2027,7 +2100,31 @@
         questionEditingId=q.id;questionEditingMode=btn.dataset.mode;
         questionDraftPrompt=String(q.prompt||'');questionDraftChoices=Object.fromEntries((q.choices||[]).map(ch=>[String(ch.number),ch.text]));
         questionDraftChoiceOrder=(q.choices||[]).map(ch=>Number(ch.number));
+        clearQuestionFigureDraft();
+        questionDraftFigures=copyJson(Array.isArray(q.figureImages)?q.figureImages:
+          (q.figureImage?[{src:q.figureImage,alt:q.figureAlt||'',caption:q.figureCaption||''}]:[]));
         render();root.querySelector('#master-question-prompt,[data-choice-editor]')?.focus();break;
+      }
+      case 'master-question-figure-add':{
+        const q=currentQuestion();
+        if(!q||q.id!==questionEditingId||questionEditingMode!=='prompt'||!masterCanEditExplanation()||questionFigureSaving||contentSaving)break;
+        syncQuestionFigureFields();
+        if(questionDraftFigures.filter(f=>!(f.src||f.image)).length>=10){toast('새 Figure는 최대 10개까지 추가할 수 있습니다.');break;}
+        questionDraftFigures.push({src:'',caption:''});
+        const next=questionDraftFigures.length-1;
+        render();root.querySelector(`[data-question-figure-file="${next}"]`)?.focus();break;
+      }
+      case 'master-question-figure-remove':{
+        const q=currentQuestion();
+        if(!q||q.id!==questionEditingId||questionEditingMode!=='prompt'||!masterCanEditExplanation()||questionFigureSaving||contentSaving)break;
+        syncQuestionFigureFields();
+        const index=Number(btn.dataset.index);
+        if(!Number.isInteger(index)||index<0||index>=questionDraftFigures.length||questionDraftFigures[index].src||questionDraftFigures[index].image)break;
+        questionDraftFigures.splice(index,1);
+        const shifted=new Map();
+        for(const [i,file] of questionFigureFiles)if(i!==index)shifted.set(i>index?i-1:i,file);
+        questionFigureFiles.clear();for(const [i,file] of shifted)questionFigureFiles.set(i,file);
+        render();break;
       }
       case 'master-choice-add':{
         const q=currentQuestion();if(!q||q.id!==questionEditingId||questionEditingMode!=='choices'||!masterCanEditExplanation()||contentSaving)break;
@@ -2043,7 +2140,7 @@
         questionDraftChoices[String(number)]='';
         render();root.querySelector(`[data-choice-editor="${number}"]`)?.focus();break;
       }
-      case 'master-question-cancel':questionEditingId='';questionEditingMode='';questionDraftChoiceOrder=[];questionDraftChoices={};render();break;
+      case 'master-question-cancel':if(questionFigureSaving||contentSaving)break;questionEditingId='';questionEditingMode='';questionDraftChoiceOrder=[];questionDraftChoices={};clearQuestionFigureDraft();render();break;
       case 'master-question-save':await saveMasterQuestion();break;
       case 'master-evidence-quick-add':{
         const q=currentQuestion();if(!q||!masterCanEditExplanation())break;
@@ -2215,6 +2312,20 @@
   });
   root.addEventListener('change',(e)=>{
     const el=e.target;
+    if(el.hasAttribute('data-question-figure-file')){
+      const q=currentQuestion();
+      if(!q||q.id!==questionEditingId||questionEditingMode!=='prompt'||!masterCanEditExplanation())return;
+      const index=Number(el.dataset.questionFigureFile);
+      if(!Number.isInteger(index)||index<0||index>=questionDraftFigures.length||questionDraftFigures[index].src)return;
+      const file=el.files?.[0];if(!file)return;
+      if(!['image/jpeg','image/png','image/webp'].includes(file.type)||!file.size||file.size>10485760){
+        toast('10MB 이하의 PNG, JPG 또는 WEBP Figure 이미지를 선택해주세요.');el.value='';return;
+      }
+      questionFigureFiles.set(index,file);
+      const label=root.querySelector(`[data-question-figure-status="${index}"]`);
+      if(label)label.textContent=`선택됨: ${file.name} (${(file.size/1048576).toFixed(2)}MB) · 저장 시 업로드`;
+      return;
+    }
     if(el.dataset.uploadKey){
       if(!masterCanEditExplanation()||!supplementalDraft)return;
       const file=el.files?.[0];if(!file)return;

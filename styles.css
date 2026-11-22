@@ -1411,3 +1411,5 @@ html[data-theme=light] .review-number-button.pending{background:#fff4d9;border-c
 .archive-question-source .question-figure-img {width:100%;max-height:none;height:auto;object-fit:contain;}
 .archive-number-options {display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;}
 .archive-number-options .option {min-height:44px;}
+
+.home-disclaimer{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}.site-version{margin-left:auto;flex-shrink:0;font-size:.75rem}

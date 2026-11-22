@@ -1467,3 +1467,13 @@ html[data-theme=light] .review-number-button.pending{background:#fff4d9;border-c
 .image-modal .image-zoom-viewport img{display:block;width:auto;height:auto;max-width:none;max-height:none;object-fit:contain;border-radius:4px;background:#fff;flex-shrink:0;}
 .image-modal .image-caption{margin:0 auto 2px;flex:0 0 auto;max-height:8vh;overflow:auto;}
 @media(max-width:760px){.image-modal{padding:7px;}.image-modal .image-zoom-toolbar button{padding:8px 11px;}}
+
+/* v1.4.1 UI patch: keep the master edit action immediately beside bookmark. */
+.quiz-mode .question-head-actions .master-question-trigger{
+  border-color:color-mix(in srgb,var(--accent) 25%,var(--stroke2));
+  background:color-mix(in srgb,var(--accent) 5%,var(--panel2));
+  font-weight:750;
+}
+.quiz-mode .question-head-actions .master-question-trigger:hover{
+  border-color:var(--accent);
+}

@@ -141,6 +141,12 @@
       return false;
     }finally{contentSaving=false;}
   }
+  // Keep the master-only trigger next to the bookmark; the editor itself
+  // remains below the question header so long text fields have full width.
+  function masterQuestionButton(q){
+    if(!masterCanEditExplanation())return '';
+    return `<button class="icon-btn master-question-trigger" data-action="master-question-menu" aria-expanded="${questionEditMenuId===q.id?'true':'false'}" title="관리자 전용 문항 수정">✎ 문항 수정</button>`;
+  }
   function masterQuestionTools(q){
     if(!masterCanEditExplanation())return '';
     const menu=questionEditMenuId===q.id;
@@ -152,7 +158,8 @@
       form=`<strong>선택지 수정</strong><p class="fine">선택지 번호와 정답은 변경되지 않습니다.</p>${(q.choices||[]).map(ch=>
         `<label for="master-choice-${ch.number}">${circles[ch.number-1]||ch.number}번 선택지</label><textarea id="master-choice-${ch.number}" data-choice-editor="${ch.number}" rows="2" maxlength="15000">${esc(questionDraftChoices[String(ch.number)]??ch.text)}</textarea>`).join('')}`;
     }
-    return `<section class="master-question-tools"><button class="button secondary small" data-action="master-question-menu">✎ 문항 수정</button>
+    if(!menu&&!form)return '';
+    return `<section class="master-question-tools">
       ${menu?`<div class="master-question-menu"><button class="button secondary small" data-action="master-question-start" data-mode="prompt">제시문 수정</button><button class="button secondary small" data-action="master-question-start" data-mode="choices" ${!q.choices?.length?'disabled':''}>선택지 수정</button></div>`:''}
       ${form?`<div class="master-edit-form">${form}<div class="master-edit-actions"><button class="button small" data-action="master-question-save" ${contentSaving?'disabled':''}>변경사항 저장</button><button class="button secondary small" data-action="master-question-cancel">취소</button></div></div>`:''}
     </section>`;
@@ -1636,10 +1643,9 @@
     return `<section class="exam-panel" data-question-id="${esc(q.id)}"><div class="question-header">
       <div class="question-heading-line"><div class="question-heading-text"><div class="question-id">${studyMode==='year-exam'?esc(yearExamTeacherLabel(q.professor,q))+' 교수님 · ':''}QUESTION / ${esc(q.label)}</div><h2 class="question-num">${esc(q.label)} <span class="question-index">${curr+1} / ${scope.length}</span></h2></div>${matchMedia('(max-width:760px)').matches?'':(window.HeonInk?.controls(q.id)||'')}</div>
       <div class="question-info-line"><div class="question-meta"><span class="pill ${validationPillClass}">${verifiedDisplay}</span><span class="pill">${esc(yearName(q.year))}</span>${submission(q)?`<span class="pill blue">제출 완료</span>`:''}</div>
-      <div class="question-head-actions"><button class="bookmark" data-action="bookmark" data-id="${esc(q.id)}" title="북마크" aria-pressed="${isBookmark(q)}">${isBookmark(q)?'★':'☆'}</button><button class="icon-btn report-question-btn" data-action="report-popup" data-question-id="${esc(q.id)}" title="문항 번호·설명·이미지를 첨부해 오류 제보" aria-label="${esc(q.label)}번 문제 오류 제보하기">✎ 제보하기</button><button class="icon-btn" data-action="toggle-evidence">${infoExpanded?'해설 접기':'해설 열기'}</button></div></div></div>
+      <div class="question-head-actions"><button class="bookmark" data-action="bookmark" data-id="${esc(q.id)}" title="북마크" aria-pressed="${isBookmark(q)}">${isBookmark(q)?'★':'☆'}</button>${masterQuestionButton(q)}<button class="icon-btn report-question-btn" data-action="report-popup" data-question-id="${esc(q.id)}" title="문항 번호·설명·이미지를 첨부해 오류 제보" aria-label="${esc(q.label)}번 문제 오류 제보하기">✎ 제보하기</button><button class="icon-btn" data-action="toggle-evidence">${infoExpanded?'해설 접기':'해설 열기'}</button></div></div></div>
       ${masterQuestionTools(q)}
       <div class="prompt">${esc(formatPrompt(q.prompt||'원본 이미지에서 문제 본문을 확인하세요.'))}</div>
-      ${q.transcriptionStatus==='ocr_draft_needs_visual_review'?'<p class="review-note">⚠ 인쇄된 원문에서 자동으로 전사한 문항입니다. 글자 오인식 가능성이 있으므로 아래 ‘기출 원본 이미지 보기’에서 대조해 주세요.</p>':''}
       ${q.transcriptionStatus==='incomplete_visual_review_required'?'<p class="review-note">⚠ 지문·선지 전사가 완성되지 않은 문항입니다. 누락된 보기를 임의로 만들지 않았습니다.</p>':''}
       ${renderInlineQuestionFigures(q)}
       ${q.type==='short'?`<label class="muted" for="short-answer">주관식 답안</label><textarea class="short-input" id="short-answer" data-question="${esc(q.id)}" placeholder="답안을 입력하세요. 입력하는 즉시 저장됩니다.">${esc(typeof r.selected==='string'?r.selected:'')}</textarea>`:

@@ -9,7 +9,7 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   const circles = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
   const TALLY_FORM_ID = '6DjZg5';
-  const PUBLIC_VERSION = '1.3.6';
+  const PUBLIC_VERSION = '1.3.7';
   const PUBLIC_RELEASE_DATE = '2026-11-14';
   const LEADERBOARD_IMAGE_BY_RANK = {1:'assets/ui/rank-first.png',2:'assets/ui/rank-second.png',3:'assets/ui/rank-third.png'};
   // Keep the underlying provenance, but omit internal answer-approval workflow from study copy.
@@ -62,6 +62,146 @@
        const reason=q.choiceExplanations[String(ch.number)] || '이 선택지를 판단할 직접 근거를 충분히 확보하지 못했습니다.';
        return `<div class="choice-reason ${right?'right':''}"><p><b>${circles[ch.number-1]||ch.number}</b> ${esc(studyCopy(reason))}</p></div>`;
     }).join('')}</section>`;
+  }
+
+  // Master explanation editor v1.3.7. Supabase stores only edited explanation
+  // text and revision history; question IDs, answers, evidence and learning
+  // records are never modified by this feature.
+  const explanationOverrides = new Map();
+  let explanationOverridesOwner = '';
+  let explanationOverrideRefreshAt = 0;
+  let explanationOverrideLoading = false;
+  let masterExplanationRoleSeen = false;
+  let explanationEditingId = '';
+  let explanationDraft = '';
+  let explanationHistoryOpen = false;
+  let explanationHistoryItems = [];
+  let explanationSaving = false;
+  function masterCanEditExplanation() {
+    const account=window.HeonStudyAccount;
+    return !!(account?.master && String(account.profile?.username||'').toLowerCase()==='ssk8181');
+  }
+  function updateQuestionExplanation(q) {
+    if(!q || !q.id)return;
+    if(!Object.prototype.hasOwnProperty.call(q,'__heonBaseExplanation')){
+      Object.defineProperty(q,'__heonBaseExplanation',{value:String(q.explanation||''),writable:false,configurable:false,enumerable:false});
+    }
+    const override=explanationOverrides.get(q.id);
+    q.explanation=override ? override.body : q.__heonBaseExplanation;
+  }
+  function applyAllExplanationOverrides(){
+    for(const doc of professorCache.values())for(const q of doc.questions||[])updateQuestionExplanation(q);
+  }
+  async function loadSharedExplanationOverrides(force=false){
+    const account=window.HeonStudyAccount;
+    const uid=account?.userId;
+    if(!uid||!account.active||explanationOverrideLoading)return;
+    if(!force && explanationOverridesOwner===uid)return;
+    explanationOverrideLoading=true;
+    try{
+      const {data,error}=await account.client.rpc('heon_editor_list_overrides');
+      if(error)throw error;
+      if(window.HeonStudyAccount?.userId!==uid)return;
+      explanationOverrides.clear();
+      for(const item of data||[])explanationOverrides.set(item.question_id,{
+        body:String(item.body||''),revision:Number(item.revision||0),updatedAt:item.updated_at
+      });
+      explanationOverridesOwner=uid;
+      explanationOverrideRefreshAt=Date.now();
+      applyAllExplanationOverrides();
+      if(catalog)render();
+    }catch(error){
+      console.warn('해설 수정 내역을 읽지 못했습니다.',error.message||error);
+      // Missing SQL must not prevent normal question/explanation rendering.
+      if(masterCanEditExplanation() && /function|schema cache|does not exist|not found|permission/i.test(String(error.message||''))){
+        toast('Supabase에 해설 편집 SQL을 먼저 설치해야 합니다.');
+      }
+    }finally{explanationOverrideLoading=false;}
+  }
+  function masterEditorHTML(q){
+    if(explanationEditingId!==q.id||!masterCanEditExplanation())return '';
+    const entries=explanationHistoryItems.map(item=>
+      `<div style="border-top:1px solid var(--border,#dbe2ea);padding:10px 0;display:flex;gap:10px;align-items:center;justify-content:space-between">
+      <div style="min-width:0;max-width:80%"><strong>v${Number(item.revision)||0}${Number(item.revision)===0?' · 초기 원문':''}</strong><p class="fine" style="margin:5px 0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:82px;overflow:auto">${esc(String(item.body||'').slice(0,320))}</p></div>
+      <button class="button secondary small" data-action="master-explanation-restore" data-revision="${Number(item.revision)||0}" ${explanationSaving?'disabled':''}>이 버전 복원</button></div>`
+    ).join('');
+    return `<section class="master-explanation-editor" style="margin:14px 0;padding:16px;border:1px solid #8ca4c8;border-radius:14px;background:rgba(105,137,178,.08)">
+      <label for="master-explanation-text" style="display:block;font-weight:700;margin-bottom:8px">해설 수정 · ${esc(q.label)}</label>
+      <textarea id="master-explanation-text" spellcheck="false" rows="9" maxlength="30000" style="width:100%;box-sizing:border-box;border-radius:10px;border:1px solid #aebed1;padding:12px;background:var(--card,#fff);color:var(--text,#182333);font:inherit;line-height:1.65;resize:vertical" ${explanationSaving?'disabled':''}>${esc(explanationDraft)}</textarea>
+      <p class="fine" style="margin:8px 0">줄바꿈을 직접 수정할 수 있습니다. 원래 해설과 수정 이력은 보존됩니다.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="button small" data-action="master-explanation-save" ${explanationSaving?'disabled':''}>${explanationSaving?'저장 중…':'저장'}</button>
+        <button class="button secondary small" data-action="master-explanation-cancel" ${explanationSaving?'disabled':''}>취소</button>
+        <button class="button secondary small" data-action="master-explanation-history" ${explanationSaving?'disabled':''}>수정 기록</button>
+      </div>
+      ${explanationHistoryOpen?`<div style="margin-top:12px"><strong>수정 기록 · 이전 버전 복원</strong>${entries||'<p class="fine">아직 기록이 없습니다.</p>'}</div>`:''}
+    </section>`;
+  }
+  function installMasterExplanationEditor(q,card){
+    if(!q||!card||!masterCanEditExplanation())return;
+    const header=card.querySelector('.evidence-head');
+    if(!header)return;
+    const button=document.createElement('button');
+    button.type='button';button.className='button secondary small';
+    button.dataset.action='master-explanation-edit';button.textContent='✎ 해설 수정';
+    button.setAttribute('aria-label',`${q.label} 해설 수정`);
+    header.insertBefore(button,header.lastElementChild);
+    const ui=masterEditorHTML(q);
+    if(ui){const flow=card.querySelector('.evidence-flow')||card;
+      const panel=document.createElement('div');panel.innerHTML=ui;
+      flow.insertBefore(panel,flow.firstChild);
+    }
+  }
+  function closeExplanationEditor(){
+    explanationEditingId='';explanationDraft='';explanationHistoryOpen=false;explanationHistoryItems=[];explanationSaving=false;
+  }
+  function currentEditingQuestion(){
+    return currentQuestion()?.id===explanationEditingId?currentQuestion():null;
+  }
+  async function saveMasterExplanation(){
+    const q=currentEditingQuestion();if(!q||!masterCanEditExplanation()||explanationSaving)return;
+    const draft=String(root.querySelector('#master-explanation-text')?.value||'').trim();
+    if(!draft){toast('해설을 비워둘 수 없습니다.');return;}
+    if(draft.length>30000){toast('해설은 30,000자 이하여야 합니다.');return;}
+    explanationSaving=true;explanationDraft=draft;
+    const revision=explanationOverrides.get(q.id)?.revision||0;
+    const client=sharedLeaderboardClient();
+    try{
+      const {data,error}=await client.rpc('heon_editor_save_explanation',{
+        p_question_id:q.id,p_body:draft,p_original_body:q.__heonBaseExplanation||'',p_expected_revision:revision
+      });
+      if(error)throw error;
+      const saved=Array.isArray(data)?data[0]:data;
+      explanationOverrides.set(q.id,{body:String(saved?.body||draft),revision:Number(saved?.revision||revision+1),updatedAt:saved?.updated_at});
+      applyAllExplanationOverrides();closeExplanationEditor();render();toast('해설 수정이 Supabase에 저장되었습니다.');
+    }catch(error){
+      toast(/REVISION_CONFLICT/.test(String(error.message))?'다른 수정본이 저장됐습니다. 새로고침 후 다시 수정해주세요.':'해설 저장 실패: '+String(error.message||error).slice(0,130));
+    }finally{explanationSaving=false;}
+  }
+  async function showMasterExplanationHistory(){
+    const q=currentEditingQuestion();if(!q||!masterCanEditExplanation()||explanationSaving)return;
+    explanationDraft=String(root.querySelector('#master-explanation-text')?.value??explanationDraft);
+    const {data,error}=await sharedLeaderboardClient().rpc('heon_editor_get_history',{p_question_id:q.id});
+    if(error){toast('수정 기록 읽기 실패: '+String(error.message||error).slice(0,130));return;}
+    explanationHistoryItems=Array.isArray(data)?data:[];
+    explanationHistoryOpen=true;render();
+  }
+  async function restoreMasterExplanation(version){
+    const q=currentEditingQuestion();if(!q||!masterCanEditExplanation()||explanationSaving)return;
+    if(!Number.isInteger(version)||version<0||!explanationHistoryItems.some(x=>Number(x.revision)===version))return;
+    if(!confirm(`해설을 v${version} 내용으로 되돌릴까요? 현재 버전도 기록에 보존됩니다.`))return;
+    const revision=explanationOverrides.get(q.id)?.revision||0;
+    explanationSaving=true;
+    try{
+      const {data,error}=await sharedLeaderboardClient().rpc('heon_editor_restore_explanation',{
+        p_question_id:q.id,p_restore_revision:version,p_expected_revision:revision
+      });
+      if(error)throw error;
+      const restored=Array.isArray(data)?data[0]:data;
+      explanationOverrides.set(q.id,{body:String(restored?.body??''),revision:Number(restored?.revision||revision+1),updatedAt:restored?.updated_at});
+      applyAllExplanationOverrides();closeExplanationEditor();render();toast('이전 해설 버전을 복원했습니다.');
+    }catch(error){toast('복원 실패: '+String(error.message||error).slice(0,130));}
+    finally{explanationSaving=false;}
   }
 
   const emptyState = () => ({version:1,records:{},yearExamRecords:{},predictionRecords:{},unitRecords:{},bookmarks:{},yearExamBookmarks:{},predictionBookmarks:{},unitBookmarks:{},dailyGoals:{},customAnswers:{},customMulti:{},lastVisited:{},reviewSchedule:{},bookmarkChanges:{},recordChanges:{},customAnswerChanges:{},lastProfessor:null,prefs:{theme:'dark',explanationWidth:450,nickname:'',playerId:''}});
@@ -617,6 +757,7 @@
     if(!Array.isArray(data.questions))throw Error('교수님 JSON에 questions 배열이 없습니다.');
     const ids=new Set();
     for(const q of data.questions){if(ids.has(q.id))throw Error(`중복 문제 ID: ${q.id}`);ids.add(q.id);}
+    for(const q of data.questions)updateQuestionExplanation(q);
     data.questions.sort((a,b)=>(yearSortValue(a.year)-yearSortValue(b.year))||(a.number-b.number)||a.id.localeCompare(b.id));
     professorCache.set(id,data);return data;
   }
@@ -889,6 +1030,7 @@
       for(const node of [...evidenceCard.childNodes])if(node!==header)flow.appendChild(node);
       evidenceCard.appendChild(flow);
     }
+    if(view==='quiz' && infoExpanded && quizQuestion)installMasterExplanationEditor(quizQuestion,evidenceCard);
     window.HeonInk?.mount();
     ensureTodayGoalLoaded();
     if(keepPanelScroll) {
@@ -1492,6 +1634,16 @@
     if(btn.matches('input[type=checkbox]'))return; // change listener handles checkbox
     const action=btn.dataset.action;
     switch(action) {
+      case 'master-explanation-edit':{
+        const q=currentQuestion();if(!q||!masterCanEditExplanation())break;
+        explanationEditingId=q.id;explanationDraft=String(q.explanation||'');
+        explanationHistoryOpen=false;explanationHistoryItems=[];render();
+        root.querySelector('#master-explanation-text')?.focus();break;
+      }
+      case 'master-explanation-cancel':if(masterCanEditExplanation()){closeExplanationEditor();render();}break;
+      case 'master-explanation-save':await saveMasterExplanation();break;
+      case 'master-explanation-history':await showMasterExplanationHistory();break;
+      case 'master-explanation-restore':await restoreMasterExplanation(Number(btn.dataset.revision));break;
       case 'print-collection':await exportCollection(btn.dataset.kind==='bookmarks'?'bookmarks':'wrong');break;
       case 'save-collection-pdf':await exportCollection(btn.dataset.kind==='bookmarks'?'bookmarks':'wrong');break;
       case 'report-popup':openReportPopup(btn.dataset.questionId||'');break;
@@ -1620,6 +1772,7 @@
   });
   root.addEventListener('input', e=>{
     const el=e.target;
+    if(el.id==='master-explanation-text'){explanationDraft=el.value;return;}
     if(el.id==='global-search-input'){
       searchText=el.value;searchOpen=true;updateSearchSuggestions();loadSearchIndex();return;
     }
@@ -1690,6 +1843,10 @@
     if(e.key==='Enter'&&e.target.matches('.brand')){view='home';render();}
   });
   window.addEventListener('storage',e=>{if(e.key===KEY&&e.newValue!==e.oldValue){readState();render();toast('다른 탭에서 변경된 학습 기록을 반영했습니다.');}});
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden && Date.now()-explanationOverrideRefreshAt>180000 && window.HeonStudyAccount?.active)
+      loadSharedExplanationOverrides(true);
+  });
   async function init() {
     readState();initializeLegacyReviewSchedule();theme();
     try {
@@ -1723,6 +1880,9 @@
         if(badge)badge.textContent=window.HeonStudyAccount?.statusLabel?.()||'학습 기록 계정';
         const uid=window.HeonStudyAccount?.userId||'';
         if(uid!==inkAccountSeen){inkAccountSeen=uid;window.HeonInk?.setAccount();}
+        const isMaster=masterCanEditExplanation();
+        if(isMaster!==masterExplanationRoleSeen){masterExplanationRoleSeen=isMaster;if(catalog)render();}
+        if(uid && explanationOverridesOwner!==uid)loadSharedExplanationOverrides();
       }
       window.HeonStudyAccount?.init(
         ()=>state,

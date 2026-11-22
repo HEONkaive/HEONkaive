@@ -1258,6 +1258,7 @@
       evidenceCard.appendChild(flow);
     }
     if(view==='quiz' && infoExpanded && quizQuestion)installMasterExplanationEditor(quizQuestion,evidenceCard);
+    if(view==='quiz')restoreEvidenceTwoColumns(evidenceCard?.querySelector('.evidence-flow'));
     window.HeonInk?.mount();
     ensureTodayGoalLoaded();
     if(keepPanelScroll) {
@@ -1267,6 +1268,106 @@
       if(nextEvidence)nextEvidence.scrollTop=evidenceScroll;
     }
   }
+  // v1.4.1 layout hotfix: two genuine side-by-side evidence columns.
+  // CSS multicol's balancing sent even small, indivisible slide images to the
+  // right, leaving an unexpectedly empty left column. Keep first evidence on
+  // the left and split only BETWEEN whole evidence cards, never inside images.
+  let activeEvidenceObserver=null;
+  function restoreEvidenceTwoColumns(flow){
+    if(!flow || !flow.isConnected || flow.classList.contains('adaptive-evidence'))return;
+    activeEvidenceObserver?.disconnect();activeEvidenceObserver=null;
+    const editorNodes=[];
+    const sourceNodes=[];
+    for(const node of [...flow.children]){
+      // When the master editor is open, keep its controls full width above the
+      // two study columns, not broken into an inaccessible half-column.
+      if(node.querySelector('.master-editor-section,.master-edit-form') ||
+         node.matches('.master-editor-section,.master-edit-form'))editorNodes.push(node);
+      else sourceNodes.push(node);
+    }
+    const blocks=[];
+    for(const node of sourceNodes){
+      // Long multi-image sections may distribute their COMPLETE image cards
+      // between columns. Existing 5+ image questions remain intact.
+      const splitSection=node.matches('section.archive-lecture-section,section.supplemental-explanation-images,section.master-manual-evidence') &&
+        node.querySelectorAll(':scope > .evidence-item').length>1;
+      if(!splitSection){blocks.push(node);continue;}
+      let section=node.cloneNode(false);
+      let hasEvidence=false;
+      for(const child of [...node.children]){
+        if(child.matches('.evidence-item') && hasEvidence){
+          if(section.childNodes.length)blocks.push(section);
+          section=node.cloneNode(false);hasEvidence=false;
+        }
+        section.appendChild(child);
+        if(child.matches('.evidence-item'))hasEvidence=true;
+      }
+      if(section.childNodes.length)blocks.push(section);
+    }
+    const host=document.createElement('div');host.className='evidence-two-column-layout';
+    const left=document.createElement('div');left.className='evidence-column evidence-column-left';
+    const right=document.createElement('div');right.className='evidence-column evidence-column-right';
+    host.append(left,right);
+    const editor=document.createElement('div');editor.className='evidence-editor-full-width';
+    for(const el of editorNodes)editor.appendChild(el);
+    flow.replaceChildren(...(editorNodes.length?[editor]:[]),host);
+    flow.classList.add('adaptive-evidence');
+    let queued=false;
+    const reflow=()=>{
+      if(!flow.isConnected)return;
+      // One-column tablet/phone presentation, in unchanged reading order.
+      left.replaceChildren(...blocks);right.replaceChildren();
+      if(window.innerWidth<=760 || blocks.length<2)return;
+      const sizes=blocks.map(el=>{
+        const style=getComputedStyle(el),rect=el.getBoundingClientRect();
+        return Math.max(0,rect.height)+(parseFloat(style.marginTop)||0)+(parseFloat(style.marginBottom)||0);
+      });
+      const total=sizes.reduce((sum,h)=>sum+h,0);
+      // The FIRST actual lecture illustration belongs to the left column;
+      // only move later material right after that illustration is complete.
+      const firstImage=blocks.findIndex(el=>el.matches('.evidence-item') ||
+        !!el.querySelector('img.evidence-image'));
+      const prefix=sizes.slice(0,Math.max(0,firstImage)).reduce((a,b)=>a+b,0);
+      const requireFirstImage=firstImage>=0 && prefix<1100;
+      const minSplit=requireFirstImage?Math.min(blocks.length,firstImage+1):1;
+      let split=blocks.length,least=Infinity,leftHeight=0;
+      for(let i=1;i<blocks.length;i++){
+        leftHeight+=sizes[i-1];
+        if(i<minSplit)continue;
+        const rightHeight=total-leftHeight;
+        // Preserve original top-to-bottom reading order; prefer balanced
+        // columns, without moving the first piece of lecture evidence away.
+        const delta=Math.abs(leftHeight-rightHeight);
+        if(delta<least){least=delta;split=i;}
+      }
+      if(split<blocks.length){
+        for(let i=split;i<blocks.length;i++)right.appendChild(blocks[i]);
+      }
+    };
+    const schedule=()=>{
+      if(queued)return;queued=true;
+      requestAnimationFrame(()=>{queued=false;reflow();});
+    };
+    reflow();
+    for(const img of flow.querySelectorAll('.evidence-two-column-layout img')){
+      if(!img.complete)img.addEventListener('load',schedule,{once:true});
+      if(!img.complete)img.addEventListener('error',schedule,{once:true});
+    }
+    if(typeof ResizeObserver!=='undefined'){
+      let lastWidth=flow.getBoundingClientRect().width;
+      activeEvidenceObserver=new ResizeObserver(entries=>{
+        const width=entries[0]?.contentRect?.width||0;
+        if(Math.abs(width-lastWidth)>2){lastWidth=width;schedule();}
+      });
+      activeEvidenceObserver.observe(flow);
+    }
+    // Keeping this listener single prevents work accumulating as users change
+    // questions; stale callbacks are ignored once their flow is detached.
+    activeEvidenceReflow=schedule;
+  }
+  let activeEvidenceReflow=null;
+  window.addEventListener('resize',()=>activeEvidenceReflow?.());
+
   // v1.2.0 · personal daily plan, unique questions across overlapping targets.
   const EXAM_DAYS={'2026-11-20':'혈액과 종양 1차 시험','2026-11-27':'성장과 노화 시험',
     '2026-12-04':'모성과 신생아 시험','2026-12-11':'혈액과 종양 2차 시험'};

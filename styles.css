@@ -1414,13 +1414,27 @@ html[data-theme=light] .review-number-button.pending{background:#fff4d9;border-c
 
 .home-disclaimer{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}.site-version{margin-left:auto;flex-shrink:0;font-size:.75rem}
 
-/* ===== v1.4.1: keep all evidence images in natural reading order ===== */
-.quiz-mode .evidence-flow{display:block!important;column-count:1!important;columns:1!important;
-  column-width:auto!important;column-gap:0!important;min-width:0;width:100%;overflow-wrap:anywhere;}
-.quiz-mode .evidence-flow > *{max-width:100%;min-width:0;break-inside:auto!important;}
-.quiz-mode .evidence-flow .evidence-item{display:block;width:100%;max-width:100%;break-inside:avoid!important;}
-.quiz-mode .evidence-flow .evidence-image{display:block;max-width:100%;height:auto;margin:0 auto;object-fit:contain;}
-.quiz-mode .evidence-flow .section-head{max-width:100%;}
+/* ===== v1.4.1 layout hotfix: stable two-column explanations + anchored images ===== */
+/* Fallback: old 2-column flow if adaptive JS is not available. */
+@media(min-width:761px){
+  .quiz-mode .evidence-flow{display:block;column-count:2;column-gap:clamp(12px,1.35vw,22px);column-fill:balance;min-width:0;width:100%;}
+}
+/* Once initialized, grid columns are independent of CSS multicol balancing.
+   A card never jumps from left to right solely because of its image height. */
+.quiz-mode .evidence-flow.adaptive-evidence{display:block!important;column-count:1!important;columns:auto!important;column-width:auto!important;column-gap:0!important;min-width:0;width:100%;overflow-wrap:anywhere;}
+.quiz-mode .evidence-flow.adaptive-evidence .evidence-editor-full-width{max-width:100%;min-width:0;margin-bottom:12px;}
+.quiz-mode .evidence-flow.adaptive-evidence .evidence-two-column-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:clamp(12px,1.35vw,22px);width:100%;align-items:start;min-width:0;}
+.quiz-mode .evidence-flow .evidence-column{display:block;min-width:0;max-width:100%;overflow-wrap:anywhere;}
+.quiz-mode .evidence-flow .evidence-column > *{max-width:100%;min-width:0;}
+.quiz-mode .evidence-flow .evidence-item{display:block;max-width:100%;min-width:0;overflow:hidden;}
+.quiz-mode .evidence-flow .evidence-image{display:block;width:100%;max-width:100%;height:auto;margin:0 auto;object-fit:contain;object-position:top;}
+.quiz-mode .evidence-flow .section-head{max-width:100%;min-width:0;}
+.quiz-mode .evidence-flow .archive-lecture-section,.quiz-mode .evidence-flow .master-manual-evidence{min-width:0;max-width:100%;}
+@media(max-width:760px){
+  .quiz-mode .evidence-flow{column-count:auto!important;columns:auto!important;}
+  .quiz-mode .evidence-flow.adaptive-evidence .evidence-two-column-layout{display:block;}
+  .quiz-mode .evidence-flow.adaptive-evidence .evidence-column-right:empty{display:none;}
+}
 .master-question-tools{margin:12px 0;max-width:100%;}
 .master-question-menu,.master-edit-actions,.master-add-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0;}
 .master-edit-form,.master-editor-section{border:1px solid var(--stroke2);background:var(--panel2);border-radius:12px;padding:14px;margin-top:12px;min-width:0;}

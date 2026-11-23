@@ -171,18 +171,20 @@
       const previous=String(f.src||f.image||'');
       const selected=questionFigureFiles.get(i);
       return `<article class="master-question-figure-card">
-        <div class="master-editor-row-head"><b>${previous?'기존':'추가할'} Figure ${i+1}</b>${previous?'':`<button class="button ghost tiny" data-action="master-question-figure-remove" data-index="${i}" ${questionFigureSaving?'disabled':''}>추가 취소</button>`}</div>
-        ${previous?`<small class="master-image-path">${esc(previous)}</small><p class="fine">기존 Figure는 유지되며 새 이미지는 뒤에 추가됩니다.</p>`:
+        <div class="master-editor-row-head"><b>${previous?'기존':'추가할'} Figure ${i+1}</b>
+          <button class="button ghost tiny" data-action="master-question-figure-remove" data-index="${i}" ${questionFigureSaving||contentSaving?'disabled':''}>${previous?'Figure 삭제':'추가 취소'}</button></div>
+        ${previous?`<img class="master-question-figure-preview" src="${esc(previous)}" alt="기존 Figure ${i+1} 미리보기" loading="lazy"><small class="master-image-path">${esc(previous)}</small>`:
           `<label for="master-question-figure-file-${i}">Figure 이미지 선택 (PNG / JPG / WEBP · 최대 10MB)</label>
-          <input id="master-question-figure-file-${i}" type="file" accept="image/png,image/jpeg,image/webp" data-question-figure-file="${i}" ${questionFigureSaving?'disabled':''}>
-          <span class="master-upload-status" data-question-figure-status="${i}">${selected?`선택됨: ${esc(selected.name)} (${(selected.size/1048576).toFixed(2)}MB) · 저장 시 업로드`:'이미지를 선택한 뒤 변경사항 저장을 눌러주세요.'}</span>
-          <label for="master-question-figure-caption-${i}">Figure 설명 (선택)</label>
-          <input id="master-question-figure-caption-${i}" data-question-figure-caption="${i}" type="text" maxlength="300" value="${esc(f.caption||'')}" placeholder="예: 자궁과 태아의 위치 그림">`}
+          <input id="master-question-figure-file-${i}" type="file" accept="image/png,image/jpeg,image/webp" data-question-figure-file="${i}" ${questionFigureSaving||contentSaving?'disabled':''}>
+          <span class="master-upload-status" data-question-figure-status="${i}">${selected?`선택됨: ${esc(selected.name)} (${(selected.size/1048576).toFixed(2)}MB) · 저장 시 업로드`:'이미지를 선택한 뒤 변경사항 저장을 눌러주세요.'}</span>`}
+        <label for="master-question-figure-caption-${i}">Figure 설명 (선택)</label>
+        <input id="master-question-figure-caption-${i}" data-question-figure-caption="${i}" type="text" maxlength="300" value="${esc(f.caption||'')}" placeholder="예: 자궁과 태아의 위치 그림">
       </article>`;
     }).join('');
-    return `<section class="master-question-figure-editor"><h4>문항 Figure 이미지 추가</h4>
-      <p class="fine">문제의 제시문 바로 아래에 그림이 나타납니다. 기존 Figure는 유지됩니다. 새 첨부는 최대 10개까지 추가할 수 있습니다.</p>
-      ${html}<button class="button secondary small" data-action="master-question-figure-add" ${fresh>=10||questionFigureSaving?'disabled':''}>＋ Figure 추가</button>
+    return `<section class="master-question-figure-editor"><h4>문항 Figure 추가 · 삭제</h4>
+      <p class="fine">기존 Figure도 삭제할 수 있습니다. 삭제는 <b>변경사항 저장</b>을 누른 뒤 모든 회원에게 반영되며, 취소하면 원래대로 유지됩니다. 이미지 연결만 제거하고 Supabase Storage의 원본 파일은 삭제하지 않습니다. 새 Figure는 한 번에 최대 10개까지 추가 가능합니다.</p>
+      ${html||'<p class="fine">현재 첨부된 Figure가 없습니다.</p>'}
+      <button class="button secondary small" data-action="master-question-figure-add" ${fresh>=10||questionFigureSaving||contentSaving?'disabled':''}>＋ Figure 추가</button>
       </section>`;
   }
   function masterQuestionTools(q){
@@ -224,10 +226,12 @@
         }
         if(String(f.caption||'').length>300){toast('Figure 설명은 300자 이하로 입력해주세요.');return;}
       }
+      // Always publish the complete Figure list: deleting the final Figure
+      // must save [] even when no new file is being uploaded.
+      const figures=copyJson(questionDraftFigures);
       if(pending.length){
         questionFigureSaving=true;
         try{
-          const figures=copyJson(questionDraftFigures);
           for(const {i} of pending){
             // Upload to the existing PRIVATE evidence prefix; no new public assets.
             const file=questionFigureFiles.get(i);
@@ -243,11 +247,11 @@
             figures[i]={src:path,alt:`${q.label}번 문제 Figure ${i+1}`,
               caption:String(figures[i].caption||'').trim()||'문항 Figure'};
           }
-          patch.figureImages=figures;
         }catch(error){
           toast(String(error.message||error).slice(0,180));return;
         }finally{questionFigureSaving=false;}
       }
+      patch.figureImages=figures;
     }else if(questionEditingMode==='choices'){
       const choices=questionDraftChoiceOrder.map(number=>{
         const original=(q.choices||[]).find(ch=>Number(ch.number)===number);
@@ -2119,7 +2123,9 @@
         if(!q||q.id!==questionEditingId||questionEditingMode!=='prompt'||!masterCanEditExplanation()||questionFigureSaving||contentSaving)break;
         syncQuestionFigureFields();
         const index=Number(btn.dataset.index);
-        if(!Number.isInteger(index)||index<0||index>=questionDraftFigures.length||questionDraftFigures[index].src||questionDraftFigures[index].image)break;
+        if(!Number.isInteger(index)||index<0||index>=questionDraftFigures.length)break;
+        const existing=!!(questionDraftFigures[index].src||questionDraftFigures[index].image);
+        if(existing&&!confirm('이 Figure를 문항에서 삭제할까요? 변경사항 저장 전에는 실제 문항이 바뀌지 않습니다. Supabase Storage의 원본 파일은 유지됩니다.'))break;
         questionDraftFigures.splice(index,1);
         const shifted=new Map();
         for(const [i,file] of questionFigureFiles)if(i!==index)shifted.set(i>index?i-1:i,file);

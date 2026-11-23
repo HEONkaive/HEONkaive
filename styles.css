@@ -1478,7 +1478,7 @@ html[data-theme=light] .review-number-button.pending{background:#fff4d9;border-c
   border-color:var(--accent);
 }
 
-/* v1.4.1 figure attachment editor: existing figures remain untouched. */
+/* v1.4.1 Figure attachment editor: master can add and remove existing Figures. */
 .master-question-figure-editor{margin:14px 0 10px;padding:12px;border:1px solid var(--stroke2);border-radius:12px;background:var(--panel);min-width:0;}
 .master-question-figure-editor h4{margin:0 0 7px;font-size:14px;color:var(--accent);}
 .master-question-figure-editor .fine{margin:7px 0 12px;line-height:1.6;}
@@ -1486,3 +1486,7 @@ html[data-theme=light] .review-number-button.pending{background:#fff4d9;border-c
 .master-question-figure-card input[type=file],.master-question-figure-card input[type=text]{width:100%;max-width:100%;box-sizing:border-box;color:var(--text);}
 .master-question-figure-card input[type=text]{padding:9px 11px;border:1px solid var(--stroke2);border-radius:9px;background:var(--panel2);font:inherit;font-size:13px;}
 .master-question-figure-card input[type=file]{font-size:12px;}
+
+/* Figure delete controls + private-image previews in the master editor. */
+.master-question-figure-card .master-question-figure-preview{display:block;width:auto;max-width:min(100%,260px);max-height:175px;height:auto;object-fit:contain;margin:8px 0;border:1px solid var(--stroke2);border-radius:8px;background:var(--panel2);}
+.master-question-figure-card .master-editor-row-head .button{white-space:nowrap;}

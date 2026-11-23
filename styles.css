@@ -1490,3 +1490,5 @@ html[data-theme=light] .review-number-button.pending{background:#fff4d9;border-c
 /* Figure delete controls + private-image previews in the master editor. */
 .master-question-figure-card .master-question-figure-preview{display:block;width:auto;max-width:min(100%,260px);max-height:175px;height:auto;object-fit:contain;margin:8px 0;border:1px solid var(--stroke2);border-radius:8px;background:var(--panel2);}
 .master-question-figure-card .master-editor-row-head .button{white-space:nowrap;}
+
+.lecture-source-line{display:flex;align-items:baseline;flex-wrap:nowrap;gap:.5rem;min-width:0}.lecture-source-line .file-page{flex:none;white-space:nowrap}.lecture-source-line .file-name{margin:0!important;min-width:0;overflow-wrap:anywhere}.pdf-archive-evidence .archive-lecture-item .evidence-image{display:block;width:auto;max-width:100%;max-height:330px;object-fit:contain;margin-inline:auto}.pdf-archive-evidence .evidence-explanation{white-space:pre-line}

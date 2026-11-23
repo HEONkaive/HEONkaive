@@ -9,8 +9,8 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
   const circles = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
   const TALLY_FORM_ID = '6DjZg5';
-  const PUBLIC_VERSION = '1.4.1';
-  const PUBLIC_RELEASE_DATE = '2026-11-22';
+  const PUBLIC_VERSION = '1.4.2';
+  const PUBLIC_RELEASE_DATE = '2026-11-23';
   const LEADERBOARD_IMAGE_BY_RANK = {1:'assets/ui/rank-first.png',2:'assets/ui/rank-second.png',3:'assets/ui/rank-third.png'};
   // Keep the underlying provenance, but omit internal answer-approval workflow from study copy.
   function studyCopy(v) {
@@ -352,7 +352,7 @@
     if(!masterCanEditExplanation()&&!(q.manualEvidence||[]).some(x=>x.image||x.src))return '';
     const items=(q.manualEvidence||[]).filter(x=>x.image||x.src||masterCanEditExplanation());
     return `<section class="master-manual-evidence"><div class="section-head"><h4 class="section-title">추가 강의안 첨부</h4><span class="fine">${(q.manualEvidence||[]).filter(x=>x.image||x.src).length}개</span></div>
-      ${items.map((item,i)=>item.image||item.src?`<article class="evidence-item"><div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">${esc(item.page?'PDF '+item.page+'쪽':'페이지 미입력')}</span><span class="file-name">${esc(item.file||'관리자 직접 첨부 강의안')}</span></div></div><img class="evidence-image" src="${esc(item.image||item.src)}" alt="${esc(item.file||'추가 강의안 원본')}" loading="lazy" data-action="zoom" data-caption="${esc(item.file||'추가 강의안')} · ${esc(item.page||'페이지 미입력')}"><div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`:
+      ${items.map((item,i)=>item.image||item.src?`<article class="evidence-item"><div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">${esc(item.page?item.page+'p':'페이지 미입력')}</span><span class="file-name">${esc(item.file||'관리자 직접 첨부 강의안')}</span></div></div><img class="evidence-image" src="${esc(item.image||item.src)}" alt="${esc(item.file||'추가 강의안 원본')}" loading="lazy" data-action="zoom" data-caption="${esc(item.file||'추가 강의안')} · ${esc(item.page||'페이지 미입력')}"><div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`:
         `<div class="master-empty-lecture-box">강의안 이미지 미첨부 · 해설 수정에서 파일을 등록하세요.</div>`).join('')}
       ${masterCanEditExplanation()&&(q.manualEvidence||[]).length<4?`<button class="button secondary small" data-action="master-evidence-quick-add">▧ 네모박스 생성하기 (${(q.manualEvidence||[]).length}/4)</button>`:''}
     </section>`;
@@ -1800,17 +1800,17 @@
     const pending=q.validation?.stage==='pending';
     const choices=Object.entries(q.choiceExplanations||{}).map(([n,t])=>
       `<div class="archive-choice-reason"><p><b>${esc(circles[Number(n)-1]||n)}</b> ${esc(t)}</p></div>`).join('');
-    const refs=meta.lectureReferences||[];
+    const refs=meta.lectureReview2026?[]:(meta.lectureReferences||[]);
     const lectures=meta.lectureImages||[];
     const evidences=lectures.map((fig,i)=>`<article class="evidence-item archive-lecture-item">
-      ${fig.file||fig.page?`<div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">${esc(fig.page?'PDF '+fig.page+'쪽':'페이지 미입력')}</span><span class="file-name">${esc(fig.file||'관리자 변경 강의안')}</span></div></div>`:''}
-      <img class="evidence-image" src="${esc(fig.src||fig.image||'')}" alt="${esc(fig.alt||'PDF 원본 강의안 부분 발췌')}" loading="lazy" data-action="zoom" data-caption="${esc(fig.file||'홍기연 강의안')} · ${esc(fig.page?'PDF '+fig.page+'쪽':meta.displayLabel||yearName(q.year))} · 근거 ${i+1}"/>
+      ${fig.file||fig.page?`<div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">${esc(fig.page?fig.page+'p':'페이지 미입력')}</span><span class="file-name">${esc(fig.file||'관리자 변경 강의안')}</span></div></div>`:''}
+      <img class="evidence-image" src="${esc(fig.src||fig.image||'')}" alt="${esc(fig.alt||'PDF 원본 강의안 부분 발췌')}" loading="lazy" data-action="zoom" data-caption="${esc(fig.file||'홍기연 강의안')} · ${esc(fig.page?fig.page+'p':meta.displayLabel||yearName(q.year))} · 근거 ${i+1}"/>
       <div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`).join('');
-    return `<aside class="evidence-panel pdf-archive-evidence"><div class="evidence-head"><div><div class="evidence-kicker">USER-PROVIDED PDF · v1.3</div><h3>원문 정답 및 해설</h3></div><button class="icon-btn" data-action="toggle-evidence" title="해설 접기">✕</button></div>
+    return `<aside class="evidence-panel pdf-archive-evidence"><div class="evidence-head"><div><div class="evidence-kicker">USER-PROVIDED PDF · v1.3</div><h3>${meta.lectureReview2026?'기출 답안과 강의안 해설':'원문 정답 및 해설'}</h3></div><button class="icon-btn" data-action="toggle-evidence" title="해설 접기">✕</button></div>
       <div class="question-meta" style="margin-top:12px"><span class="pill ${pending?'warn':'blue'}">${pending?'⚠ PDF 원문에서 판정 보류':'● 제공 PDF에 수록된 답안'}</span><span class="pill">${esc(meta.displayLabel||yearName(q.year))} · 홍기연</span></div>
       <div class="result-box ${pending?'pending':'correct'}"><b>PDF 원문 답안 · ${esc(meta.answerText||'판정 불가')}</b>${pending?'<p>PDF에 명시된 판정 유보 상태를 그대로 유지합니다.</p>':''}</div>
       ${q.explanation?`<p class="evidence-explanation">${esc(q.explanation)}</p>`:''}
-      ${lectures.length?`<section class="archive-lecture-section"><h4>정답의 강의안 근거</h4>${evidences}${refs.map(v=>`<p class="file-name">${esc(v)}</p>`).join('')}</section>`:''}
+      ${lectures.length?`<section class="archive-lecture-section"><h4>${meta.lectureReview2026?'강의안 근거':'정답의 강의안 근거'}</h4>${evidences}${refs.map(v=>`<p class="file-name">${esc(v)}</p>`).join('')}</section>`:''}
       ${meta.correctionText?`<section class="choice-reason-list archive-choice-list"><h4>나머지 보기 · PDF 원문 정정</h4><p>${esc(meta.correctionText)}</p></section>`:''}
       ${choiceReasonList(q)}
       ${manualEvidenceHTML(q)}
@@ -1824,7 +1824,7 @@
   }
   function lecturePageLabel(e) {
     if(e.sourceType==='user_supplied_image')return '사용자 제공 강의안 이미지';
-    return `${e.pageBasis?.startsWith('단원')?'단원':'PDF'} ${e.page}쪽`;
+    return e.pageBasis?.startsWith('단원')?`단원 ${e.page}p`:`${e.page}p`;
   }
   function auditAnswerText(q,answer) {
     if(answer==null)return '미확정';
@@ -1877,7 +1877,7 @@
       ${studyAiExplanation(q)?`<div class="ai-study-explanation"><b>✦ AI 학습 해설 · 강의안 검증 근거와 구분</b><p>${esc(studyAiExplanation(q))}</p></div>`:''}${q.explanation?`<p class="evidence-explanation">${!accepted&&!sourceMatch2026?'<b>'+(officialKey?'22학번 시험지 정답표 기준 · 강의안 검증과 구분':highlighted?'형광펜·별도 해설 대조 · 강의안 검증과 구분':userConfirmed?'선택지 및 근거 해설':q.answerSource==='ai_interpretation'?'AI 해설':'검토용 해설 · 정답 미확정')+'</b> · ':''}${esc(studyCopy(q.explanation))}</p>`:''}${choiceReasonList(q)}${renderExplanationImages(q)}${questionAuditHTML(q)}${!accepted&&!sourceMatch2026&&studyNote(q)?`<p class="review-note">${esc(studyNote(q))}</p>`:''}${audit2026&&audit2026.status!=='match'?`<p class="review-note">2026 강의안 재검토: ${esc(studyCopy(audit2026.decisionReason))}</p>`:''}
       ${officialKey&&q.answerKey?.image?`<details class="source-card exam-answer-key"><summary>22학번 공식 정답표 원본 · PDF 마지막 7페이지 (클릭하여 보기)</summary><p class="source-warning">왼쪽 1~5번·오른쪽 6~10번을 묶어 읽는 표입니다. 8번은 ①·②·④ 복수 정답입니다. 강의안 근거 이미지와는 별개입니다.</p><img class="source-image" src="${esc(q.answerKey.image)}" alt="22학번 시험지 7쪽 공식 정답표" loading="lazy" data-action="zoom" data-caption="22학번 시험지 PDF 7쪽 · 객관식 1~68번 공식 정답표"></details>`:''}
       <div class="section-head"><h4 class="section-title" style="font-size:14px">${confirmed?'채택된 강의안 원본':userConfirmed&&userEvidence?'해설 참고 강의안':'검토용 강의안 원본'}</h4><span class="fine">${refs.length}페이지</span></div>
-      ${refs.length?refs.map(e=>`<article class="evidence-item"><div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">PDF ${e.page}페이지${e.lectureYear?' · '+esc(e.lectureYear)+'년':''}</span><span class="file-name">${esc(e.file)}</span></div>${confirmed&&e.quote?`<div class="quote">원문 확인 기준: ${esc(e.quote)}</div>`:''}</div><img class="evidence-image" src="${esc(e.image)}" alt="${esc(e.file)} ${e.page}페이지 ${confirmed?'검증 근거':'검토용 자료'}" loading="lazy" data-action="zoom" data-caption="${esc(e.file)} · PDF ${e.page}페이지"><div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`).join(''):'<div class="empty" style="padding:21px">일치하는 강의안 페이지를 확보하지 못했습니다. 관련 없는 이미지로 근거를 대체하지 않았습니다.</div>'}
+      ${refs.length?refs.map(e=>`<article class="evidence-item"><div class="evidence-meta"><div class="lecture-source-line"><span class="file-page">${esc(e.page)}p${e.lectureYear?' · '+esc(e.lectureYear)+'년':''}</span><span class="file-name">${esc(e.file)}</span></div>${confirmed&&e.quote?`<div class="quote">원문 확인 기준: ${esc(e.quote)}</div>`:''}</div><img class="evidence-image" src="${esc(e.image)}" alt="${esc(e.file)} ${e.page}페이지 ${confirmed?'검증 근거':'검토용 자료'}" loading="lazy" data-action="zoom" data-caption="${esc(e.file)} · PDF ${e.page}페이지"><div class="zoom-label">이미지를 누르면 확대됩니다 ⤢</div></article>`).join(''):'<div class="empty" style="padding:21px">일치하는 강의안 페이지를 확보하지 못했습니다. 관련 없는 이미지로 근거를 대체하지 않았습니다.</div>'}
       ${manualEvidenceHTML(q)}
       ${!confirmed&&!officialKey?`<section class="user-answer"><h4>직접 정답 지정</h4><p>강의안을 확인한 후 정답을 직접 지정할 수 있습니다. 선택 즉시 자동 저장되며 제출한 답안의 채점 상태가 변경됩니다.</p>${q.type==='short'?`<input class="search" id="custom-short" type="text" placeholder="정답 문장을 입력하세요" value="${esc(usedCustom?String(ans):'')}" style="width:100%;margin-bottom:8px"><button class="button small secondary" data-action="save-custom-short">정답 저장</button>`:
       `<div class="custom-answers">${Array.from({length:Math.max(5,q.choices?.length||5)},(_,i)=>{const a=i+1;const sel=ans!=null&&(Array.isArray(ans)?ans.includes(a):ans===a);return `<button class="number-pill ${sel?'active':''}" data-action="custom-answer" data-number="${a}" aria-pressed="${sel}">${circles[i]||i+1}</button>`}).join('')}</div><div class="row" style="margin-top:12px"><label class="fine"><input type="checkbox" data-action="custom-multi" ${state.customMulti[q.id]?'checked':''}> 복수 정답 지정</label></div>`}

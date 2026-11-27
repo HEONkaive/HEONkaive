@@ -908,6 +908,9 @@
       const selected=record(q,'year-exam').selected;
       answers[q.id]=q.type==='short'?String(selected??''):(Array.isArray(selected)?selected:[selected]).map(Number).sort((a,b)=>a-b);
     }
+    for(const q of all){
+      if(q.anySingleAnswer && choiceMatches(q,answers[q.id],q.answer)) answers[q.id]=[q.answer[0]];
+    }
     return {subjectId:selectedSubject,year:String(selectedExamYear),score:s.correct,total:s.total,answers};
   }
   async function maybeOfferPublicRank(){
@@ -1021,6 +1024,10 @@
   function submission(q,mode=studyMode) { return !!record(q,mode).submitted; }
   function effectiveAnswer(q) { if(q.lectureAudit?.gradingHold)return null;if(q.answerConfirmation?.status==='confirmed')return q.answer;if(q.lectureAudit&&(q.lectureAudit.answerRevised||q.answerKey))return q.answer;if(q.validation?.stage==='exam_answer_key')return q.answer;return Object.prototype.hasOwnProperty.call(state.customAnswers,q.id) ? state.customAnswers[q.id] : q.answer; }
   const normalizeText = s => String(s||'').toLowerCase().replace(/[\s.!?,'"’‘“”\-_:;]+/g,'');
+  function choiceMatches(q,picked,known) {
+    if(q.anySingleAnswer && Array.isArray(known)) return known.some(value=>arraysEqual(picked,value));
+    return arraysEqual(picked,known);
+  }
   function arraysEqual(a,b) { const sa=[...(Array.isArray(a)?a:[a])].map(String).sort();const sb=[...(Array.isArray(b)?b:[b])].map(String).sort();return sa.length===sb.length && sa.every((x,i)=>x===sb[i]); }
   function evaluation(q,mode=studyMode) {
     if (!submission(q,mode)) return 'not-started';
@@ -1036,7 +1043,7 @@
       return aliases.some(item=>typed===normalizeText(item)) ? 'correct':'wrong';
     }
     if (picked==null || (Array.isArray(picked) && !picked.length)) return 'pending';
-    return arraysEqual(picked,known) ? 'correct':'wrong';
+    return choiceMatches(q,picked,known) ? 'correct':'wrong';
   }
   function stats(list,mode=studyMode) {
     const result={total:list.length,completed:0,correct:0,wrong:0,pending:0};
@@ -1072,7 +1079,7 @@
     return !s.total||!s.completed?'empty':(s.completed>=s.total?'complete':'partial');
   }
   function subjectById(id) { return catalog.subjects.find(s=>s.id===id); }
-  function yearExamTeacherLabel(id, question) { if (studyMode === "year-exam" && question?.yearTeacherLabel) return question.yearTeacherLabel; return id === "won-taewan" ? "원태완(최운정 기출)" : id === "choi-geumha" ? "최금하(김헌수 기출)" : (profMeta(id)?.name||""); }
+  function yearExamTeacherLabel(id, question) { if (question?.yearTeacherLabel) return question.yearTeacherLabel; return id === "won-taewan" ? "원태완(최운정 기출)" : id === "choi-geumha" ? "최금하(김헌수 기출)" : (profMeta(id)?.name||""); }
   function profMeta(id) {
     for (const sub of catalog.subjects) for(const p of sub.professors)if(p.id===id)return {...p,subjectId:sub.id,subjectName:sub.name};
     return null;
@@ -1761,7 +1768,7 @@
     const validationPillClass=q.lectureAudit?(q.lectureAudit.status==='matched'?'ok':'warn'):q.isPrediction?'blue':
       (ungradedArchive||status==='pending'?'warn':'ok');
     return `<section class="exam-panel" data-question-id="${esc(q.id)}"><div class="question-header">
-      <div class="question-heading-line"><div class="question-heading-text"><div class="question-id">${studyMode==='year-exam'?esc(yearExamTeacherLabel(q.professor,q))+' 교수님 · ':''}QUESTION / ${esc(q.label)}</div><h2 class="question-num">${esc(q.label)} <span class="question-index">${curr+1} / ${scope.length}</span></h2></div>${matchMedia('(max-width:760px)').matches?'':(window.HeonInk?.controls(q.id)||'')}</div>
+      <div class="question-heading-line"><div class="question-heading-text"><div class="question-id">QUESTION / ${esc(q.label)}</div><h2 class="question-num"><span>${esc(q.label)}</span><span class="question-teacher">${esc(yearExamTeacherLabel(q.professor,q))}</span><span class="question-index">${curr+1} / ${scope.length}</span></h2></div>${matchMedia('(max-width:760px)').matches?'':(window.HeonInk?.controls(q.id)||'')}</div>
       <div class="question-info-line"><div class="question-meta"><span class="pill ${validationPillClass}">${verifiedDisplay}</span><span class="pill">${esc(yearName(q.year))}</span>${submission(q)?`<span class="pill blue">제출 완료</span>`:''}</div>
       <div class="question-head-actions"><button class="bookmark" data-action="bookmark" data-id="${esc(q.id)}" title="북마크" aria-pressed="${isBookmark(q)}">${isBookmark(q)?'★':'☆'}</button>${masterQuestionButton(q)}<button class="icon-btn report-question-btn" data-action="report-popup" data-question-id="${esc(q.id)}" title="문항 번호·설명·이미지를 첨부해 오류 제보" aria-label="${esc(q.label)}번 문제 오류 제보하기">✎ 제보하기</button><button class="icon-btn" data-action="toggle-evidence">${infoExpanded?'해설 접기':'해설 열기'}</button></div></div></div>
       ${masterQuestionTools(q)}
@@ -1866,7 +1873,7 @@
     const accepted=q.validation.stage==='accepted';const officialKey=q.validation.stage==='exam_answer_key';const highlighted=q.validation.stage==='highlight_reviewed';const userConfirmed=q.validation.stage==='user_confirmed';const ans=effectiveAnswer(q);const audit2026=q.validation?.supplemental2026;const sourceMatch2026=userConfirmed&&audit2026?.status==='match';
     const usedCustom=Object.prototype.hasOwnProperty.call(state.customAnswers,q.id);
     const userEvidence=Array.isArray(q.evidence)&&q.evidence.length>0;
-    const refs=(accepted||sourceMatch2026||userConfirmed&&userEvidence)?q.evidence:q.candidateEvidence||[];
+    const refs=(accepted||sourceMatch2026||(userConfirmed||officialKey)&&userEvidence)?q.evidence:q.candidateEvidence||[];
     const confirmed=(accepted||sourceMatch2026)&&!usedCustom;const userDesignated=userConfirmed||usedCustom;const originalAccepted=accepted&&!usedCustom;
     const answerText=(a)=>q.type==='short'?String(a):[...(Array.isArray(a)?a:[a])].map(n=>{
       const item=q.choices.find(c=>c.number===n);return `${circles[n-1]||n} ${item?item.text:''}`;
@@ -1893,7 +1900,7 @@
     const symbol={correct:'정답',wrong:'오답',pending:'채점 보류','not-started':'미제출'}[status];
     const answerText=q.archivePdf?.gradingHold?(q.archivePdf.answerText||'검토 필요'):answerArr.length?answerArr.map(n=>q.type==='short'?String(n):(circles[n-1]||n)).join(' · '):'미확정';
     const imgs=(q.figureImages||[]).filter(x=>x.src||x.image);
-    const baseRefs=q.lectureAudit||q.validation?.stage==='accepted'||(q.validation?.supplemental2026?.status==='match')?q.evidence||[]:q.candidateEvidence||[];
+    const baseRefs=q.lectureAudit||q.validation?.stage==='exam_answer_key'&&q.evidence?.length||q.validation?.stage==='accepted'||(q.validation?.supplemental2026?.status==='match')?q.evidence||[]:q.candidateEvidence||[];
     const refs=[...baseRefs,...(q.manualEvidence||[]).filter(item=>item.image||item.src)];
     return `<article class="review-detail" aria-live="polite"><div class="review-detail-head"><div><small>${esc(yearExamTeacherLabel(q.professor,q))} 교수님 · ${esc(q.label)}</small><h2>${studyMode==='year-exam'?(q.type==='short'?esc('주'+q.label.split('주').pop()):esc(String(q.number))):esc(q.label)}번 문제 <span class="review-status-badge ${status}">${symbol}</span></h2></div><button class="button secondary small" data-action="report-popup" data-question-id="${esc(q.id)}" title="문항 번호·설명·이미지를 첨부할 수 있어요">✎ 오류 제보하기</button><button class="button secondary small" data-action="review-question" data-id="${esc(q.id)}">문제풀이로 ↗</button></div>
       <div class="review-detail-prompt">${esc(formatPrompt(q.prompt))}</div>
@@ -2002,7 +2009,7 @@
         if(answer===null||answer===undefined||q.gradingMode==='manual'||q.type==='short')return false;
         const want=Array.isArray(answer)?answer:[answer];
         const chosen=Array.isArray(rec.selected)?rec.selected:[rec.selected];
-        return !(want.length===chosen.length&&want.every(n=>chosen.includes(n)));
+        return !choiceMatches(q,chosen,want);
       }).sort((a,b)=>Number(a.year)-Number(b.year)||Number(a.number)-Number(b.number)||a.professor.localeCompare(b.professor));
       if(!selected.length) {
         pdfProgress(dialog,kind==='wrong'?'현재 학습 모드에 저장된 오답이 없습니다.':'현재 학습 모드에 저장된 북마크가 없습니다.');
